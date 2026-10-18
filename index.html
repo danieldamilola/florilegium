@@ -1,0 +1,1349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F7F6F1">
+<title>Florilegium — a monochrome reading room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap" rel="stylesheet">
+<style>
+/* FLORILEGIUM mobile — paper / ink / wash; two faces; four radii.
+   References: Aesop, Monocle, Are.na, NYT Books, Readwise Reader. */
+:root{
+  --paper:#F7F6F1; --white:#fff; --ink:#161513; --muted:#6F6D65; --faint:#98968C;
+  --line:rgba(22,21,19,.14); --line-strong:rgba(22,21,19,.30); --wash:#ECEAE3;
+  --serif:'Newsreader',Georgia,'Times New Roman',serif;
+  --sans:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --r-cover:3px; --r-card:18px; --r-sheet:26px;
+  --pad:22px; --nav-h:66px; --status-h:44px;
+}
+*,*:before,*:after{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:#E4E2DC;color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;-webkit-tap-highlight-color:transparent}
+:focus-visible{outline:1px solid currentColor;outline-offset:2px}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+input{font:inherit;color:inherit}
+::selection{background:var(--ink);color:var(--paper)}
+.stage{min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:30px 16px}
+.device{
+  width:390px;height:min(844px,calc(100dvh - 92px));aspect-ratio:390/844;flex:none;
+  background:var(--paper);border:1px solid rgba(22,21,19,.20);border-radius:46px;overflow:hidden;
+  display:flex;flex-direction:column;position:relative;
+  box-shadow:0 40px 90px rgba(22,21,19,.20),0 1px 0 rgba(255,255,255,.65) inset;
+}
+.stage-note{font-size:8.5px;letter-spacing:.18em;text-transform:uppercase;color:#828077;display:flex;align-items:center;gap:10px;user-select:none}
+.stage-note:before,.stage-note:after{content:'';width:26px;height:1px;background:rgba(22,21,19,.18)}
+.statusbar{height:var(--status-h);flex:none;display:flex;align-items:flex-end;justify-content:space-between;padding:0 26px 8px;font-size:12px;font-weight:600;letter-spacing:.01em}
+.sb-icons{display:flex;align-items:center;gap:5px}
+.sb-icons svg{display:block;height:11px;width:auto}
+.app{flex:1;min-height:0;position:relative;display:flex;flex-direction:column;background:var(--paper);overflow:hidden;padding-top:env(safe-area-inset-top)}
+
+/* screens */
+.screens{flex:1;min-height:0;position:relative}
+.view{position:absolute;inset:0;display:none;flex-direction:column}
+.view.active{display:flex;animation:viewIn .18s ease both}
+@keyframes viewIn{from{opacity:.4}to{opacity:1}}
+.scroll{flex:1;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none;padding:0 var(--pad) 30px}
+.scroll::-webkit-scrollbar{display:none}
+
+/* type */
+.kicker{font-size:9.5px;line-height:1.25;letter-spacing:.16em;text-transform:uppercase;font-weight:600;color:var(--muted)}
+.screen-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding:22px 0 15px;border-bottom:1px solid var(--line)}
+.screen-title{font-family:var(--serif);font-weight:500;font-size:34px;line-height:1;letter-spacing:-.025em;margin:8px 0 0}
+.count-large{font-family:var(--serif);font-size:34px;line-height:1;font-weight:400;color:var(--faint);padding-bottom:1px}
+.sec{margin-top:30px}
+.sec-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-bottom:9px;border-bottom:1px solid var(--line)}
+.sec-link{display:inline-flex;align-items:center;gap:5px;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;font-weight:600;color:var(--muted)}
+.sec-link svg{width:12px;height:12px}
+.rule{height:1px;background:var(--line);margin:18px 0}
+.muted{color:var(--muted)}
+
+/* buttons */
+.btn{height:50px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:0 19px;font-size:13px;font-weight:500;letter-spacing:.005em;transition:transform .14s ease,opacity .14s ease;white-space:nowrap}
+.btn:active{transform:scale(.982)}
+.btn-primary{background:var(--ink);color:var(--paper)}
+.btn-ghost{background:var(--white);border:1px solid var(--line-strong);color:var(--ink)}
+.btn svg{width:16px;height:16px;flex:none}
+.btn-row{display:flex;gap:10px;margin-top:18px}
+.btn-row .btn{flex:1}
+.btn-row .btn-primary{flex:1.22}
+.icon-btn{width:38px;height:38px;flex:none;display:grid;place-items:center;border-radius:999px;margin-right:-8px}
+.icon-btn svg{width:20px;height:20px}
+.text-btn{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+
+/* covers */
+.cover{position:relative;overflow:hidden;border-radius:var(--r-cover);background:#E8E6DF;flex:none}
+.cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:2;display:block;filter:grayscale(1) contrast(1.04)}
+.cover .cfb{position:absolute;inset:0;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:12px;background:#E8E6DF;text-align:center;border:1px solid rgba(22,21,19,.07)}
+.cover .cfb .flower{display:grid;place-items:center;opacity:.62}
+.cover .cfb svg{width:20px;height:20px;flex:none}
+.cover .cfb em{font-family:var(--serif);font-style:normal;font-size:9px;line-height:1.16;color:#4C4A44;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;max-width:94%}
+.cover .cfb .cfb-author{font-family:var(--sans);font-size:6px;line-height:1.2;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);max-width:94%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cover .cfb .cfb-mark,.cover .cfb .cfb-foot{position:absolute;left:0;right:0;text-align:center;font-family:var(--sans);font-size:5.5px;letter-spacing:.17em;text-transform:uppercase;color:#918F86}
+.cover .cfb .cfb-mark{top:7px}
+.cover .cfb .cfb-foot{bottom:7px}
+.cover.big .cfb{padding:18px;gap:12px}
+.cover.big .cfb svg{width:30px;height:30px}
+.cover.big .cfb em{font-size:14px;line-height:1.2;-webkit-line-clamp:4;max-width:88%}
+.cover.big .cfb .cfb-author{font-size:7.5px}
+.cover.big .cfb .cfb-mark,.cover.big .cfb .cfb-foot{font-size:6.5px}
+.cover-thumb{width:46px;height:62px}
+.cover-thumb .cfb em,.cover-thumb .cfb .cfb-author,.cover-thumb .cfb .cfb-mark,.cover-thumb .cfb .cfb-foot{display:none}
+.daily-cover .cover,.preview-cover .cover{width:100%;height:100%}
+
+/* home */
+.home-head{display:flex;align-items:center;justify-content:space-between;padding:18px 0 14px}
+.brand{display:flex;align-items:center;gap:10px}
+.brand svg{width:22px;height:22px;flex:none}
+.brand-name{font-size:11px;letter-spacing:.20em;text-transform:uppercase;font-weight:600}
+.home-meta{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0 10px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-bottom:20px}
+.home-meta .kicker{font-size:8.5px;letter-spacing:.14em}
+.daily-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:13px}
+.mat{background:var(--wash);border-radius:var(--r-card);padding:25px 24px 22px;display:flex;justify-content:center;position:relative}
+.mat:after{content:'';position:absolute;inset:9px;border:1px solid rgba(22,21,19,.07);border-radius:11px;pointer-events:none}
+.daily-cover{width:192px;height:258px;box-shadow:0 18px 38px rgba(22,21,19,.24),0 2px 4px rgba(22,21,19,.10)}
+.daily-title{font-family:var(--serif);font-weight:500;font-size:29px;line-height:1.06;letter-spacing:-.022em;margin:20px 0 6px;text-align:center;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.daily-author{font-size:11.5px;color:var(--muted);text-align:center;letter-spacing:.01em}
+.daily-meta{margin-top:7px;font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);text-align:center}
+.daily-quote{font-family:var(--serif);font-size:15px;line-height:1.55;color:#484640;margin:14px auto 0;max-width:292px;text-align:center;min-height:64px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.q-skel{display:block;height:8px;background:var(--wash);border-radius:2px;margin:7px auto;width:88%}
+.q-skel.short{width:62%}
+.daily .btn-row{margin-top:16px}
+
+/* rows */
+.row{display:flex;align-items:center;gap:12px;width:100%;padding:12px 0;border-bottom:1px solid var(--line);text-align:left}
+.row:last-child{border-bottom:0}
+.row-no{width:17px;flex:none;font-size:8.5px;letter-spacing:.06em;color:var(--faint);font-variant-numeric:tabular-nums;padding-top:2px;align-self:flex-start}
+.row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.row-title{font-family:var(--serif);font-size:16.5px;line-height:1.2;font-weight:500;letter-spacing:-.012em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.row-sub{font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row-arrow{flex:none;color:var(--faint);display:grid;place-items:center}
+.row-arrow svg{width:14px;height:14px}
+.row-status{flex:none;text-align:right;font-size:8px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);display:flex;align-items:center;gap:5px}
+.row-status i{width:4px;height:4px;border-radius:50%;background:var(--ink);display:block}
+.browse-row{padding:15px 0}
+.browse-row .row-title{font-family:var(--sans);font-size:14px;font-weight:500;letter-spacing:-.005em}
+.browse-row .row-sub{font-size:10px}
+.foot{margin:28px 0 6px;text-align:center;font-size:8px;line-height:1.9;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+
+/* for you */
+.fy-head{padding-bottom:15px}
+.counter{font-family:var(--serif);font-size:19px;line-height:1;font-weight:400;font-variant-numeric:tabular-nums;color:var(--ink);padding-bottom:2px;white-space:nowrap}
+.counter span{font-family:var(--sans);font-size:9.5px;letter-spacing:.08em;color:var(--faint)}
+.deck-label-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0 13px}
+.deck-label-row .kicker{font-size:8.5px;letter-spacing:.13em}
+.deck-wrap{position:relative;height:452px}
+.deck-card{position:absolute;left:0;right:0;top:0;height:100%;background:var(--white);border:1px solid var(--line);border-radius:var(--r-card);overflow:hidden}
+.deck-card.ghost{background:var(--paper);box-shadow:none}
+.deck-card.g1{transform:translateY(9px) scale(.968);z-index:1}
+.deck-card.g2{transform:translateY(18px) scale(.936);z-index:0}
+.deck-card.top{z-index:3;display:flex;flex-direction:column;box-shadow:0 20px 44px rgba(22,21,19,.13),0 1px 2px rgba(22,21,19,.05);touch-action:pan-y;will-change:transform}
+.deck-cover{height:238px;flex:none;position:relative;background:var(--wash);overflow:hidden}
+.deck-cover .cover{position:absolute;inset:0;border-radius:0;box-shadow:none}
+.deck-cover .cover img{object-position:center 28%}
+.deck-cover .cover.big .cfb{padding:18px}
+.deck-info{flex:1;min-height:0;display:flex;flex-direction:column;padding:15px 17px 16px}
+.deck-kicker{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.deck-title{font-family:var(--serif);font-size:24px;line-height:1.08;letter-spacing:-.02em;font-weight:500;margin:7px 0 4px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.deck-author{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.deck-meta{margin-top:7px;font-size:8.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.deck-desc{margin-top:9px;font-size:10.5px;line-height:1.55;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.deck-hint{margin-top:auto;padding-top:11px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.deck-hint svg{width:13px;height:13px;color:var(--faint)}
+.deck-actions{display:flex;gap:10px;margin-top:18px}
+.deck-actions .btn{flex:1}
+.deck-actions .btn-ghost{flex:.85}
+.deck-progress{display:flex;align-items:center;gap:12px;margin-top:15px}
+.progress{flex:1;height:1px;background:var(--line);position:relative;overflow:hidden}
+.progress i{position:absolute;left:0;top:0;height:1px;background:var(--ink);display:block;transition:width .3s ease}
+.deck-note{font-size:8px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);white-space:nowrap}
+
+/* empty + loader */
+.empty{text-align:center;padding:64px 20px 40px}
+.empty .flower{display:block;width:54px;height:54px;margin:0 auto 20px;color:var(--ink);opacity:.9}
+.empty .flower svg{width:100%;height:100%}
+.empty h3{font-family:var(--serif);font-weight:500;font-size:25px;line-height:1.12;letter-spacing:-.02em;margin:0 0 8px}
+.empty p{font-size:11.5px;line-height:1.65;color:var(--muted);margin:0 auto 20px;max-width:240px}
+.loader{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:54px 20px;color:var(--faint)}
+.loader .flower{width:30px;height:30px;animation:breathe 1.9s ease-in-out infinite}
+.loader .flower svg{width:100%;height:100%}
+.loader span{font-size:8.5px;letter-spacing:.16em;text-transform:uppercase}
+@keyframes breathe{0%,100%{opacity:.28;transform:scale(.97)}50%{opacity:.9;transform:scale(1)}}
+
+/* tab bar */
+.tabbar{height:var(--nav-h);flex:none;display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);background:rgba(247,246,241,.94);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);padding:5px 6px calc(5px + env(safe-area-inset-bottom))}
+.tab{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;color:var(--faint)}
+.tab svg{width:21px;height:21px;flex:none}
+.tab span{font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:500}
+.tab.on{color:var(--ink)}
+
+/* overlays */
+.overlays{position:absolute;inset:0;z-index:50;pointer-events:none}
+.overlay{position:absolute;inset:0;pointer-events:auto;background:var(--white);display:flex;flex-direction:column;transform:translateY(14px);opacity:0;transition:opacity .20s ease,transform .28s cubic-bezier(.22,.8,.2,1);isolation:isolate}
+.overlay.open{transform:none;opacity:1}
+.sheet-head{height:56px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;border-bottom:1px solid var(--line);background:inherit}
+.sheet-head .icon-btn{margin:0}
+.sheet-head .icon-btn:first-child{margin-left:-7px}
+.sheet-head .icon-btn:last-child{margin-right:-7px}
+.sheet-head .kicker{font-size:9px;letter-spacing:.18em}
+
+/* preview */
+.preview-scroll{flex:1;overflow-y:auto;scrollbar-width:none;padding:22px var(--pad) 20px}
+.preview-scroll::-webkit-scrollbar{display:none}
+.preview-mat{background:var(--wash);border-radius:var(--r-card);padding:24px;display:flex;justify-content:center;position:relative}
+.preview-mat:after{content:'';position:absolute;inset:9px;border:1px solid rgba(22,21,19,.07);border-radius:11px;pointer-events:none}
+.preview-cover{width:154px;height:207px;box-shadow:0 16px 34px rgba(22,21,19,.22)}
+.preview-body{padding-top:20px}
+.preview-title{font-family:var(--serif);font-size:29px;line-height:1.06;letter-spacing:-.022em;font-weight:500;margin:8px 0 7px}
+.preview-author{font-size:12px;color:var(--muted)}
+.preview-meta{margin-top:6px;font-size:8.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--faint)}
+.preview-desc{font-size:12.5px;line-height:1.65;color:#494741;margin:0;padding-top:12px}
+.preview-text{font-family:var(--serif);font-size:16px;line-height:1.7;color:#2B2A27;min-height:80px}
+.preview-text p{margin:0 0 16px}
+.preview-text p:last-child{margin-bottom:0}
+.preview-end{padding:22px 0 4px;text-align:center}
+.preview-actions{flex:none;display:flex;gap:10px;padding:12px var(--pad) calc(12px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:rgba(255,255,255,.95);backdrop-filter:blur(14px)}
+.preview-actions .btn{flex:1}
+.preview-actions .btn-primary{flex:1.18}
+
+/* reader */
+.overlay.reader{background:var(--paper);color:var(--ink)}
+.overlay.reader[data-theme="white"]{background:#fff}
+.overlay.reader[data-theme="night"]{background:#101010;color:#EFEDE6;--muted:#A6A39A;--faint:#77746C;--line:rgba(255,255,255,.18);--wash:#1C1C1A}
+.reader-top{height:56px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;border-bottom:1px solid var(--line)}
+.reader-top .icon-btn{margin:0}
+.reader-top .icon-btn:first-child{margin-left:-7px}
+.reader-top .icon-btn:last-child{margin-right:-7px}
+.reader-top-title{font-family:var(--serif);font-style:italic;font-size:13px;line-height:1.2;max-width:214px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
+.reader-progress{height:1px;flex:none;background:var(--line);position:relative}
+.reader-progress i{position:absolute;left:0;top:0;height:1px;width:0;background:currentColor;display:block}
+.reader-scroll{flex:1;overflow-y:auto;scrollbar-width:none}
+.reader-scroll::-webkit-scrollbar{display:none}
+.reader-body{padding:28px var(--reader-pad,24px) 44px;max-width:580px;margin:0 auto;font-family:var(--reader-font,var(--serif));font-size:var(--reader-size,18px);line-height:1.72;color:var(--reader-ink,inherit)}
+.reader-chapter{font-family:var(--sans);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);text-align:center;margin-bottom:24px}
+.reader-body p{margin:0 0 20px}
+.reader-body p:first-of-type:first-letter{font-family:var(--serif);font-size:3.15em;float:left;line-height:.8;padding:4px 8px 0 0;font-weight:500}
+.reader-body p.no-drop:first-of-type:first-letter{float:none;font-size:inherit;line-height:inherit;padding:0;font-family:inherit;font-weight:inherit}
+.reader-end{margin-top:30px;padding-top:22px;border-top:1px solid var(--line);text-align:center}
+.reader-end p{font-family:var(--sans);font-size:11px;line-height:1.65;color:var(--muted);margin:10px auto 18px;max-width:250px}
+.reader[data-theme="night"] .btn-primary{background:#EFEDE6;color:#101010}
+.reader[data-theme="night"] .btn-ghost{background:transparent;border-color:rgba(255,255,255,.32);color:#EFEDE6}
+
+/* settings / info sheets */
+.overlay.sheet-overlay{background:transparent}
+.sheet-mask{position:absolute;inset:0;background:rgba(15,15,14,.42);opacity:0;transition:opacity .22s ease}
+.overlay.open .sheet-mask{opacity:1}
+.settings{position:absolute;left:0;right:0;bottom:0;background:var(--paper);color:var(--ink);border-radius:var(--r-sheet) var(--r-sheet) 0 0;padding:8px var(--pad) calc(20px + env(safe-area-inset-bottom));transform:translateY(100%);transition:transform .28s cubic-bezier(.22,.8,.2,1);box-shadow:0 -18px 50px rgba(0,0,0,.16);max-height:88%;overflow-y:auto}
+.overlay.open .settings{transform:none}
+.grab{width:38px;height:4px;border-radius:2px;background:var(--line-strong);margin:4px auto 15px}
+.settings .sec-head{border-bottom:0;padding-bottom:4px}
+.set-row{margin:16px 0}
+.set-row .kicker{font-size:8.5px}
+.seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;border:1px solid var(--line-strong);border-radius:10px;overflow:hidden;margin-top:9px}
+.seg button{height:38px;font-size:10px;letter-spacing:.08em;text-transform:uppercase;font-weight:500;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button.on{background:var(--ink);color:var(--paper)}
+.size-row{display:flex;align-items:center;gap:14px;margin-top:9px}
+.size-btn{width:42px;height:42px;border:1px solid var(--line-strong);border-radius:999px;display:grid;place-items:center;font-size:15px;flex:none}
+.size-btn:disabled{opacity:.35}
+.size-val{flex:1;text-align:center;font-family:var(--serif);font-size:17px}
+.sheet-note{font-size:10.5px;line-height:1.65;color:var(--muted);margin:10px 0 0}
+.sheet-actions{display:flex;flex-direction:column;gap:9px;margin-top:18px}
+.sheet-actions .btn{width:100%}
+
+/* search + browse */
+.overlay.search,.overlay.browse{background:var(--paper)}
+.search-head{display:flex;align-items:center;gap:12px;padding:11px 16px;flex:none;border-bottom:1px solid var(--line)}
+.search-field{flex:1;display:flex;align-items:center;gap:9px;height:40px;background:var(--white);border:1px solid var(--line);border-radius:999px;padding:0 14px}
+.search-field svg{width:16px;height:16px;color:var(--faint);flex:none}
+.search-field input{border:0;outline:0;background:none;width:100%;font-size:12.5px;color:var(--ink)}
+.search-field input::placeholder{color:var(--faint)}
+.search-cancel{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);flex:none}
+.search-body,.browse-body{flex:1;overflow-y:auto;scrollbar-width:none;padding:0 var(--pad) 26px}
+.search-body::-webkit-scrollbar,.browse-body::-webkit-scrollbar{display:none}
+.result-meta{display:flex;align-items:center;justify-content:space-between;padding:16px 0 10px;border-bottom:1px solid var(--line);margin-bottom:2px}
+.browse-head{padding:24px var(--pad) 16px;border-bottom:1px solid var(--line);flex:none}
+.browse-title{font-family:var(--serif);font-size:34px;line-height:1;letter-spacing:-.025em;font-weight:500;margin:8px 0 8px}
+.search-idle{text-align:center;padding:60px 20px}
+.search-idle .flower{width:40px;height:40px;margin:0 auto 16px;color:var(--ink);opacity:.75}
+.search-idle .flower svg{width:100%;height:100%}
+.search-idle p{font-family:var(--serif);font-size:17px;line-height:1.4;color:var(--muted);margin:0 auto;max-width:220px}
+
+/* toast */
+.toast{position:absolute;left:50%;bottom:calc(var(--nav-h) + 16px + env(safe-area-inset-bottom));transform:translate(-50%,10px);background:var(--ink);color:var(--paper);font-size:10.5px;letter-spacing:.02em;padding:11px 16px;border-radius:999px;opacity:0;pointer-events:none;transition:opacity .2s ease,transform .2s ease;z-index:60;white-space:nowrap;max-width:calc(100% - 40px);overflow:hidden;text-overflow:ellipsis}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+body.overlay-open .toast{bottom:calc(92px + env(safe-area-inset-bottom))}
+
+/* shelf */
+.shelf-summary{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 0 0}
+.shelf-summary .kicker{font-size:8px;letter-spacing:.12em}
+.shelf-tabs{display:flex;gap:19px;border-bottom:1px solid var(--line);margin:16px 0 2px;overflow-x:auto;scrollbar-width:none}
+.shelf-tabs::-webkit-scrollbar{display:none}
+.shelf-tab{position:relative;flex:none;padding:0 0 11px;font-size:9px;letter-spacing:.11em;text-transform:uppercase;font-weight:600;color:var(--faint)}
+.shelf-tab em{font-style:normal;font-size:8px;color:var(--faint);margin-left:3px}
+.shelf-tab.on{color:var(--ink)}
+.shelf-tab.on:after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:1px;background:var(--ink)}
+
+/* profile */
+.profile-hero{text-align:center;padding:30px 0 24px;border-bottom:1px solid var(--line)}
+.monogram{width:72px;height:72px;border:1px solid var(--line-strong);border-radius:50%;display:grid;place-items:center;margin:0 auto 15px;color:var(--ink)}
+.monogram svg{width:36px;height:36px}
+.profile-name{font-family:var(--serif);font-weight:500;font-size:28px;line-height:1;letter-spacing:-.02em;margin:0 0 7px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid var(--line)}
+.stat{padding:19px 0;text-align:center;border-right:1px solid var(--line)}
+.stat:last-child{border-right:0}
+.stat b{display:block;font-family:var(--serif);font-weight:400;font-size:29px;line-height:1}
+.stat span{display:block;margin-top:6px;font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.pref-row{display:flex;align-items:center;gap:12px;width:100%;padding:16px 0;border-bottom:1px solid var(--line);text-align:left}
+.pref-row:last-child{border-bottom:0}
+.pref-label{flex:1;font-size:12.5px;font-weight:500}
+.pref-value{font-size:9.5px;letter-spacing:.03em;color:var(--faint);white-space:nowrap}
+.pref-row svg{width:14px;height:14px;color:var(--faint);flex:none}
+.about-title{font-family:var(--serif);font-weight:500;font-size:28px;line-height:1.08;letter-spacing:-.02em;margin:12px 0 6px}
+
+@media (max-width:560px){
+  body{background:var(--paper)}
+  .stage{padding:0;display:block;min-height:100dvh}
+  .device{width:100%;height:100dvh;aspect-ratio:auto;border:0;border-radius:0;box-shadow:none}
+  .statusbar{display:none}
+  .stage-note{display:none}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*:before,*:after{animation-duration:.01ms!important;transition-duration:.01ms!important}
+}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="device">
+    <div class="statusbar">
+      <span>9:41</span>
+      <span class="sb-icons">
+        <svg viewBox="0 0 17 11" fill="currentColor"><rect x="0" y="7" width="2.6" height="4" rx=".6"/><rect x="4.2" y="5" width="2.6" height="6" rx=".6"/><rect x="8.4" y="2.8" width="2.6" height="8.2" rx=".6"/><rect x="12.6" y="0.6" width="2.6" height="10.4" rx=".6"/></svg>
+        <svg viewBox="0 0 16 11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.2 3.8a10 10 0 0 1 13.6 0M3.6 6.3a6.4 6.4 0 0 1 8.8 0M6.1 8.7a2.7 2.7 0 0 1 3.8 0"/></svg>
+        <svg viewBox="0 0 25 11" fill="none" stroke="currentColor"><rect x=".6" y=".8" width="20.4" height="9.4" rx="2.6" stroke-width="1.1"/><rect x="2.2" y="2.4" width="15.4" height="6.2" rx="1.4" fill="currentColor" stroke="none"/><path d="M22.6 4.1v2.9" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </span>
+    </div>
+    <div class="app" id="app">
+      <main class="screens">
+        <section class="view view-home active" data-view="home"><div class="scroll" data-screen="home"></div></section>
+        <section class="view view-foryou" data-view="foryou"><div class="scroll" data-screen="foryou"></div></section>
+        <section class="view view-shelf" data-view="shelf"><div class="scroll" data-screen="shelf"></div></section>
+        <section class="view view-profile" data-view="profile"><div class="scroll" data-screen="profile"></div></section>
+      </main>
+      <nav class="tabbar" data-tabbar></nav>
+      <div class="overlays" data-overlays></div>
+      <div class="toast" data-toast></div>
+    </div>
+  </div>
+  <div class="stage-note">Florilegium · mobile prototype · 390 × 844</div>
+</div>
+<script>
+'use strict';
+const $=(s,el=document)=>el.querySelector(s);
+const $$=(s,el=document)=>Array.from(el.querySelectorAll(s));
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const clamp=(n,a,b)=>Math.min(b,Math.max(a,n));
+const rand=a=>a[Math.floor(Math.random()*a.length)];
+const shuffle=a=>{a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
+const fmtReads=n=>!n?'—':n>=1000000?(n/1000000).toFixed(1).replace(/\.0$/,'')+'M':n>=1000?(n/1000).toFixed(n>=10000?0:1).replace(/\.0$/,'')+'k':String(n);
+
+/* flower — the brand mark from the reference */
+const PETALS=`<ellipse cx="56" cy="19.5" rx="7.6" ry="14.6"/><ellipse cx="76.7" cy="29.5" rx="7.6" ry="14.2" transform="rotate(51.4 76.7 29.5)"/><ellipse cx="81.8" cy="51.9" rx="7.6" ry="14.6" transform="rotate(102.9 81.8 51.9)"/><ellipse cx="67.5" cy="69.9" rx="7.6" ry="13.8" transform="rotate(154.3 67.5 69.9)"/><ellipse cx="44.5" cy="69.9" rx="7.6" ry="14.8" transform="rotate(205.7 44.5 69.9)"/><ellipse cx="30.2" cy="51.9" rx="7.6" ry="14.2" transform="rotate(257.1 30.2 51.9)"/><ellipse cx="35.3" cy="29.5" rx="7.6" ry="14.4" transform="rotate(308.6 35.3 29.5)"/>`;
+const FLOWER_HEAD=`<svg viewBox="12 0 88 88" fill="none" aria-hidden="true"><g stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">${PETALS}<circle cx="56" cy="46" r="6.8" stroke-width="5.6"/></g></svg>`;
+const FLOWER=`<svg viewBox="0 0 124 120" fill="none" aria-hidden="true"><g stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">${PETALS}<path d="M56.4 55 C54.6 67.5 59.4 79.5 57.6 92.5 C56.8 99.5 58.2 103.8 61 105.4"/><ellipse cx="74" cy="76.5" rx="6.8" ry="12.8" transform="rotate(-42 74 76.5)"/><ellipse cx="47.6" cy="94.5" rx="6.1" ry="11.7" transform="rotate(37 47.6 94.5)"/><circle cx="56" cy="46" r="6.8" stroke-width="5.6"/></g></svg>`;
+
+/* one thin icon set */
+const I={
+  home:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.2 11.4 12 4.5l7.8 6.9M6.2 9.9v9.6h11.6V9.9"/></svg>',
+  deck:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="4" y="6.6" width="13.2" height="14" rx="2.2"/><path d="M7.4 3.9h10.2a2.2 2.2 0 0 1 2.2 2.2v9.6"/></svg>',
+  shelf:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4.5h3.1v15H5zM10.4 4.5h3.1v15h-3.1zM15.8 4.8l2.9.8-3.2 14.4-2.5-.7z"/></svg>',
+  user:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.2" r="3.4"/><path d="M5.2 19.5c1.7-3.7 4.2-5.5 6.8-5.5s5.1 1.8 6.8 5.5"/></svg>',
+  search:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="6.2"/><path d="m15.6 15.6 4.3 4.3"/></svg>',
+  x:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/></svg>',
+  left:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12H5.5M10.5 6.5 5 12l5.5 5.5"/></svg>',
+  right:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 12h14M13.5 6.5 19 12l-5.5 5.5"/></svg>',
+  chev:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m9.7 6.5 5.6 5.5-5.6 5.5"/></svg>',
+  bm:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M7 4.5h10v15l-5-3.7-5 3.7z"/></svg>',
+  bmFill:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.2h10a.8.8 0 0 1 .8.8v14.3a.7.7 0 0 1-1.1.6L12 16.4l-4.7 3.5a.7.7 0 0 1-1.1-.6V5a.8.8 0 0 1 .8-.8z"/></svg>',
+  check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.6 9.7 17.3 19 7"/></svg>',
+  loop:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.7 10.3a7.4 7.4 0 0 1 13-3.8l1.8 1.8M19.3 13.7a7.4 7.4 0 0 1-13 3.8l-1.8-1.8"/><path d="M19.5 4.4v4h-4M4.5 19.6v-4h4"/></svg>',
+  shuffle:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16.6 4.2h3.9v3.9M4.5 19.5 20.5 4M20.5 15.9v3.9h-3.9M14.8 15.2l5.7 4.6M4.5 4.5l4.2 4.5"/></svg>',
+  aa:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 18 8.2 6.4h.7L13.6 18M5.2 14.2h7.1"/><circle cx="18" cy="15.2" r="2.5"/><path d="M20.5 12.8v5"/></svg>'
+};
+
+const GB=id=>`https://www.gutenberg.org/cache/epub/${id}/pg${id}.cover.medium.jpg`;
+const GF=id=>`https://www.gutenberg.org/files/${id}/${id}-0.txt`;
+const FALLBACK_BOOKS=[
+  {id:1342,title:'Pride and Prejudice',author:'Jane Austen',subjects:['Romance','Fiction'],downloads:190246,cover:GB(1342),textUrl:GF(1342)},
+  {id:2701,title:'Moby Dick; Or, The Whale',author:'Herman Melville',subjects:['Adventure stories','Sea stories'],downloads:165720,cover:GB(2701),textUrl:GF(2701)},
+  {id:84,title:'Frankenstein; or, the modern prometheus',author:'Mary Wollstonecraft Shelley',subjects:['Science fiction','Gothic fiction'],downloads:144008,cover:GB(84),textUrl:GF(84)},
+  {id:11,title:"Alice's Adventures in Wonderland",author:'Lewis Carroll',subjects:['Fantasy',"Children's fiction"],downloads:121623,cover:GB(11),textUrl:GF(11)},
+  {id:1661,title:'The Adventures of Sherlock Holmes',author:'Arthur Conan Doyle',subjects:['Detective fiction','Short stories'],downloads:62140,cover:GB(1661),textUrl:GF(1661)},
+  {id:174,title:'The Picture of Dorian Gray',author:'Oscar Wilde',subjects:['Fiction','Decadence'],downloads:58102,cover:GB(174),textUrl:GF(174)},
+  {id:345,title:'Dracula',author:'Bram Stoker',subjects:['Horror','Gothic fiction'],downloads:55488,cover:GB(345),textUrl:GF(345)},
+  {id:1952,title:'The Yellow Wallpaper',author:'Charlotte Perkins Gilman',subjects:['Short stories','Feminist fiction'],downloads:8120,cover:GB(1952),textUrl:GF(1952)},
+  {id:43,title:'The Strange Case of Dr. Jekyll and Mr. Hyde',author:'Robert Louis Stevenson',subjects:['Horror','Gothic fiction'],summary:'A London lawyer investigates the strange bond between his respectable friend and a violent, misshapen man.',downloads:61240,cover:GB(43),textUrl:GF(43)},
+  {id:35,title:'The Time Machine',author:'H. G. Wells',subjects:['Science fiction','Time travel'],summary:'A Victorian inventor travels to the year 802,701 and finds humanity split into two strange species.',downloads:54890,cover:GB(35),textUrl:GF(35)},
+  {id:5200,title:'Metamorphosis',author:'Franz Kafka',subjects:['Fiction','Absurdist fiction'],summary:'A traveling salesman wakes to find himself transformed into an insect, and his family’s patience slowly curdles.',downloads:40120,cover:GB(5200),textUrl:GF(5200)},
+  {id:1260,title:'Jane Eyre',author:'Charlotte Brontë',subjects:['Romance','Gothic fiction'],summary:'A governess with a fierce inner life falls for her brooding employer, only to discover the secret hidden at Thornfield.',downloads:80230,cover:GB(1260),textUrl:GF(1260)},
+  {id:98,title:'A Tale of Two Cities',author:'Charles Dickens',subjects:['Historical fiction','Fiction'],summary:'A doctor is resurrected after eighteen years in the Bastille, and his daughter’s love draws him into the French Revolution.',downloads:47600,cover:GB(98),textUrl:GF(98)},
+  {id:64317,title:'The Great Gatsby',author:'F. Scott Fitzgerald',subjects:['Fiction','Jazz Age'],summary:'A mysterious millionaire throws lavish Long Island parties in pursuit of a woman he lost five years before.',downloads:30110,cover:GB(64317),textUrl:'https://www.gutenberg.org/cache/epub/64317/pg64317.txt'}
+];
+const EXCERPTS={
+  1342:["It is a truth universally acknowledged, that a single man in possession of a good fortune, must be in want of a wife.","However little known the feelings or views of such a man may be on his first entering a neighbourhood, this truth is so well fixed in the minds of the surrounding families, that he is considered the rightful property of some one or other of their daughters.","“My dear Mr. Bennet,” said his lady to him one day, “have you heard that Netherfield Park is let at last?” Mr. Bennet replied that he had not."],
+  2701:["Call me Ishmael. Some years ago—never mind how long precisely—having little or no money in my purse, and nothing particular to interest me on shore, I thought I would sail about a little and see the watery part of the world.","It is a way I have of driving off the spleen and regulating the circulation. Whenever I find myself growing grim about the mouth; whenever it is a damp, drizzly November in my soul — then, I account it high time to get to sea as soon as I can."],
+  84:["You will rejoice to hear that no disaster has accompanied the commencement of an enterprise which you have regarded with such evil forebodings. I arrived here yesterday, and my first task is to assure my dear sister of my welfare and increasing confidence in the success of my undertaking.","I am already far north of London, and as I walk in the streets of Petersburgh, I feel a cold northern breeze play upon my cheeks, which braces my nerves and fills me with delight."],
+  11:["Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, “and what is the use of a book,” thought Alice, “without pictures or conversations?”","So she was considering in her own mind whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her."],
+  1661:["To Sherlock Holmes she is always the woman. I have seldom heard him mention her under any other name. In his eyes she eclipses and predominates the whole of her sex.","It was not that he felt any emotion akin to love for Irene Adler. All emotions, and that one particularly, were abhorrent to his cold, precise but admirably balanced mind."],
+  174:["The studio was filled with the rich odour of roses, and when the light summer wind stirred amidst the trees of the garden, there came through the open door the heavy scent of the lilac.","From the corner of the divan of Persian saddle-bags on which he was lying, smoking, as was his custom, innumerable cigarettes, Lord Henry Wotton could just catch the gleam of the honey-sweet and honey-coloured blossoms of a laburnum."],
+  345:["3 May. Bistritz. — Left Munich at 8:35 P.M., on 1st May, arriving at Vienna early next morning; should have arrived at 6:46, but train was an hour late.","I had for dinner, or rather supper, a chicken done up some way with red pepper, which was very good but thirsty. I asked the waiter, and he said it was called “paprika hendl.”"],
+  1952:["It is very seldom that mere ordinary people like John and myself secure ancestral halls for the summer.","John laughs at me, of course, but one expects that in marriage. John is practical in the extreme. He has no patience with faith, an intense horror of superstition, and he scoffs openly at any talk of things not to be felt and seen and put down in figures."],
+  43:["Mr. Utterson the lawyer was a man of a rugged countenance, that was never lighted by a smile; cold, scanty and embarrassed in discourse; backward in sentiment; lean, long, dusty, dreary and yet somehow lovable.","He was austere with himself; drank gin when he was alone, to mortify a taste for vintages; and though he enjoyed the theatre, had not crossed the doors of one for twenty years.","At friendly meetings, and when the wine was to his taste, something eminently human beaconed from his eye; something indeed which never found its way into his talk, but which spoke not only in these silent symbols of the after-dinner face, but more often and loudly in the acts of his life."],
+  35:["The Time Traveller (for so it will be convenient to speak of him) was expounding a recondite matter to us. His grey eyes shone and twinkled, and his usually pale face was flushed and animated.","The fire burned brightly, and the soft radiance of the incandescent lights in the lilies of silver caught the bubbles that flashed and passed in our glasses.","“You must follow me carefully. I shall have to controvert one or two ideas that are almost universally accepted.”"],
+  5200:["As Gregor Samsa awoke one morning from uneasy dreams he found himself transformed in his bed into a gigantic insect. He was lying on his hard, as it were armour-plated, back and when he lifted his head a little he could see his dome-like brown belly divided into stiff arched segments.","His many legs, pitifully thin compared with the size of the rest of him, waved helplessly before his eyes.","“What has happened to me?” he thought. It was no dream."],
+  1260:["There was no possibility of taking a walk that day. We had been wandering, indeed, in the leafless shrubbery an hour in the morning; but since dinner (Mrs. Reed, when there was no company, dined early) the cold winter wind had brought with it clouds so sombre, and a rain so penetrating, that further out-door exercise was now out of the question.","I was glad of it: I never liked long walks, especially on chilly afternoons: dreadful to me was the coming home in the raw twilight, with nipped fingers and toes, and a heart saddened by the chidings of Bessie, the nurse, and humbled by the consciousness of my physical inferiority to Eliza, John, and Georgiana Reed.","“What does Bessie say I have done?” I asked."],
+  98:["It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief, it was the epoch of incredulity, it was the season of Light, it was the season of Darkness, it was the spring of hope, it was the winter of despair.","We had everything before us, we had nothing before us, we were all going direct to Heaven, we were all going direct the other way—in short, the period was so far like the present period, that some of its noisiest authorities insisted on its being received, for good or for evil, in the superlative degree of comparison only.","It was the year of Our Lord one thousand seven hundred and seventy-five."],
+  64317:["In my younger and more vulnerable years my father gave me some advice that I've been turning over in my mind ever since.","“Whenever you feel like criticizing any one,” he told me, “just remember that all the people in this world haven't had the advantages that you've had.”","He didn't say any more, but we've always been unusually communicative in a reserved way, and I understood that he meant a great deal more than that."]
+};
+const CATEGORIES=[
+  {label:'Fiction',topic:'fiction',desc:'Novels, novellas & stories'},
+  {label:'Mystery',topic:'detective',desc:'Crime, deduction & suspense'},
+  {label:'Sci-fi',topic:'science fiction',desc:'Speculation & the future'},
+  {label:'Romance',topic:'romance',desc:'Love, courtship & letters'},
+  {label:'Poetry',topic:'poetry',desc:'Verse & collections'},
+  {label:'Philosophy',topic:'philosophy',desc:'Essays, ethics & thought'}
+];
+
+/* Gutendex */
+const API='https://gutendex.com/books/';
+const stripHTML=s=>String(s||'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+function flipName(a){
+  if(!a||!a.name)return 'Unknown author';
+  const m=a.name.replace(/\s*\(.*?\)\s*$/,'').match(/^([^,]+),\s*(.+)$/);
+  return m?`${m[2]} ${m[1]}`:a.name;
+}
+function titleCase(s){
+  s=String(s||'').replace(/\$[a-z]\s*/gi,'').replace(/\s+:\s*/g,': ').replace(/\s+/g,' ').trim();
+  const words=s.split(' ');
+  const alpha=words.filter(w=>/[A-Za-z]/.test(w));
+  const lower=alpha.filter(w=>/^[a-z]/.test(w));
+  if(alpha.length<2||lower.length/alpha.length<0.3)return s;
+  const small=new Set(['a','an','and','as','at','but','by','for','from','in','into','nor','of','on','onto','or','over','the','to','up','with','yet']);
+  return words.map((w,i)=>{
+    const bare=w.replace(/^[^A-Za-z]+|[^A-Za-z]+$/g,'');
+    if(!bare)return w;
+    if(small.has(bare.toLowerCase())&&i>0&&i<words.length-1)return w.toLowerCase();
+    return w.replace(/[A-Za-z]/,c=>c.toUpperCase());
+  }).join(' ').replace(/-([a-z])/g,(m,c)=>'-'+c.toUpperCase());
+}
+function normBook(gb){
+  const f=gb.formats||{},a0=(gb.authors&&gb.authors[0])||null;
+  return {
+    id:gb.id,
+    title:titleCase(gb.title),
+    author:flipName(a0),
+    subjects:(gb.subjects||[]).map(s=>s.split(' -- ')[0]).slice(0,6),
+    summary:stripHTML((gb.summaries||[])[0]||''),
+    downloads:gb.download_count||0,
+    languages:gb.languages||[],
+    cover:f['image/jpeg']||null,
+    textUrl:f['text/plain; charset=utf-8']||f['text/plain; charset=us-ascii']||null,
+    htmlUrl:f['text/html']||null
+  };
+}
+async function jfetch(url,ms=18000){
+  const ctl=new AbortController(),t=setTimeout(()=>ctl.abort(),ms);
+  try{const r=await fetch(url,{signal:ctl.signal});if(!r.ok)throw new Error('http '+r.status);return r;}
+  finally{clearTimeout(t);}
+}
+async function fetchPopularPage(page=1){
+  const suffix=page>1?`&page=${page}`:'';
+  const j=await (await jfetch(`${API}?sort=popular${suffix}`,14000)).json();
+  return (j.results||[]).map(normBook);
+}
+async function fetchPopular(){return fetchPopularPage(1);}
+async function fetchRandom(){
+  const page=30+Math.floor(Math.random()*1800);
+  const j=await (await jfetch(`${API}?page=${page}`,16000)).json();
+  return (j.results||[]).map(normBook);
+}
+async function fetchTopic(topic){
+  const j=await (await jfetch(`${API}?topic=${encodeURIComponent(topic)}`,18000)).json();
+  return {count:j.count||0,books:(j.results||[]).map(normBook)};
+}
+async function fetchSearch(q){
+  const j=await (await jfetch(`${API}?search=${encodeURIComponent(q)}`,16000)).json();
+  return {count:j.count||0,books:(j.results||[]).map(normBook)};
+}
+
+/* text */
+const textCache=new Map(),textPending=new Map(),excerptCache=new Map();
+function cleanBlocks(raw){
+  let t=String(raw||'').replace(/\r/g,'');
+  const s=t.search(/\*\*\*\s*START OF (THE|THIS) PROJECT GUTENBERG/i);
+  if(s>=0)t=t.slice(s).replace(/^\*\*\*[^\n]*\n?/,'');
+  const e=t.search(/\*\*\*\s*END OF (THE|THIS) PROJECT GUTENBERG/i);
+  if(e>=0)t=t.slice(0,e);
+  const mc=t.indexOf('Markdown Content:');
+  if(mc>=0&&mc<4000)t=t.slice(mc+17);
+  t=t.replace(/^(Title|URL Source|Published Time):.*$/gm,'');
+  const out=[];
+  for(let b of t.split(/\n{2,}/)){
+    b=b.replace(/\n/g,' ').replace(/\s{2,}/g,' ').trim().replace(/^[#>*]+\s*/,'').replace(/^&gt;\s*/,'').replace(/^[_*]+|[_*]+$/g,'').trim();
+    b=b.replace(/_([^_\n]{1,120})_/g,'$1').replace(/\*([^*\n]{1,120})\*/g,'$1').replace(/\[\d+\]/g,'').trim();
+    const head=/^(chapter|part|book|act|letter)\b/i.test(b)&&b.length<140;
+    if(!b||(b.length<42&&!head))continue;
+    if(/^(project gutenberg|gutenberg|www\.gutenberg|\[illustration|illustration:|transcriber)/i.test(b))continue;
+    if(b.includes('gutenberg.org')&&b.length<160)continue;
+    if(/^\[.*\]\(.*\)$/.test(b))continue;
+    out.push(b);
+  }
+  return out;
+}
+const HEAD_RE=/^(chapter|part|book|act|letter)\b/i;
+function chaptersOf(blocks){
+  const raw=[];
+  blocks.forEach((b,i)=>{if(HEAD_RE.test(b)&&b.length<140)raw.push(i);});
+  const set=new Set(raw),idx=raw.filter(i=>!set.has(i-1)&&!set.has(i+1));
+  if(idx.length>=3)return idx.map(start=>({title:blocks[start],start}));
+  const ch=[];
+  for(let i=0;i<blocks.length;i+=14)ch.push({title:'',start:i});
+  return ch;
+}
+function isProse(p){
+  if(!p||p.length<90||HEAD_RE.test(p))return false;
+  const letters=p.replace(/[^A-Za-z]/g,''),caps=p.replace(/[^A-Z]/g,'');
+  if(letters.length>20&&caps.length/letters.length>.8)return false;
+  if((p.match(/\bCHAPTER\b/gi)||[]).length>1)return false;
+  if(/^(project gutenberg|contents|illustration|transcriber|chiswick press)/i.test(p))return false;
+  if(/^[_*]|[_*]$/.test(p))return false;
+  return true;
+}
+function proseParas(blocks,n=5){
+  if(!blocks||!blocks.length)return [];
+  let from=0;
+  const chs=chaptersOf(blocks);
+  if(chs&&chs.length&&chs[0].start>0)from=chs[0].start+(chs[0].title?1:0);
+  const out=[];
+  for(let i=from;i<blocks.length&&out.length<n;i++)if(isProse(blocks[i]))out.push(blocks[i].trim());
+  if(!out.length)for(let i=from;i<blocks.length&&out.length<n;i++){const p=blocks[i];if(p&&p.length>80&&!HEAD_RE.test(p))out.push(p.trim());}
+  return out;
+}
+async function getBookText(book){
+  if(textCache.has(book.id))return textCache.get(book.id);
+  if(textPending.has(book.id))return textPending.get(book.id);
+  const p=(async()=>{
+    const urls=[book.textUrl,book.htmlUrl].filter(Boolean),tryUrl=async u=>{
+      try{const r=await jfetch(u,20000),b=cleanBlocks(await r.text());if(b.length>6)return b;}catch(e){}
+      try{const r=await jfetch('https://r.jina.ai/'+u,30000),b=cleanBlocks(await r.text());if(b.length>6)return b;}catch(e){}
+      return null;
+    };
+    for(const u of urls){const r=await tryUrl(u);if(r)return r;}
+    return null;
+  })();
+  textPending.set(book.id,p);
+  const r=await p;textPending.delete(book.id);textCache.set(book.id,r);return r;
+}
+async function excerptFor(book){
+  if(excerptCache.has(book.id))return excerptCache.get(book.id);
+  if(EXCERPTS[book.id]){
+    const out={paras:EXCERPTS[book.id],blocks:null,live:false};
+    excerptCache.set(book.id,out);
+    /* upgrade in the background if the full text arrives later */
+    getBookText(book).then(blocks=>{
+      if(!blocks)return;
+      const ps=proseParas(blocks,14);
+      if(ps.length>EXCERPTS[book.id].length)excerptCache.set(book.id,{paras:ps,blocks,live:true});
+    }).catch(()=>{});
+    return out;
+  }
+  const blocks=await getBookText(book);
+  let out={paras:[],blocks:null,live:false};
+  if(blocks&&blocks.length){
+    const ps=proseParas(blocks,6);
+    if(ps.length)out={paras:ps,blocks,live:true};
+  }
+  if(!out.paras.length&&EXCERPTS[book.id])out={paras:EXCERPTS[book.id],blocks:null,live:false};
+  excerptCache.set(book.id,out);
+  return out;
+}
+
+/* store */
+const LS='florilegium.mono.v1';
+const store={
+  books:[],pick:null,recommended:[],shelf:[],
+  deck:{books:[],index:0,loading:true,fetching:false},
+  settings:{theme:'paper',family:'serif',size:18,margin:1},
+  view:'home',
+  search:{q:'',results:[],count:0,loading:false,token:0}
+};
+const statusLabel={'to-read':'To read',reading:'Reading',finished:'Finished'};
+function save(){try{localStorage.setItem(LS,JSON.stringify({shelf:store.shelf,settings:store.settings}));}catch(e){}}
+function loadSaved(){
+  try{
+    const raw=localStorage.getItem(LS);if(!raw)return false;
+    const d=JSON.parse(raw);
+    if(Array.isArray(d.shelf))store.shelf=d.shelf;
+    if(d.settings)Object.assign(store.settings,d.settings);
+    return true;
+  }catch(e){return false;}
+}
+function seedShelf(){
+  const seeded=[{id:1342,status:'reading'},{id:1661,status:'to-read'},{id:345,status:'to-read'},{id:11,status:'finished'}];
+  store.shelf=seeded.map((s,i)=>{
+    const book=FALLBACK_BOOKS.find(x=>x.id===s.id);
+    return {bookId:s.id,book,status:s.status,addedAt:Date.now()-i*86400000};
+  });
+}
+const inShelf=id=>store.shelf.find(s=>s.bookId===id);
+function addToShelf(book,status='to-read'){
+  const existing=inShelf(book.id);if(existing)return existing;
+  const e={bookId:book.id,book,status,addedAt:Date.now()};
+  store.shelf.unshift(e);save();return e;
+}
+function bookById(id){
+  id=Number(id);
+  return store.books.find(b=>b.id===id)||store.deck.books.find(b=>b.id===id)||
+    store.search.results.find(b=>b.id===id)||store.recommended.find(b=>b.id===id)||
+    FALLBACK_BOOKS.find(b=>b.id===id)||(inShelf(id)&&inShelf(id).book)||null;
+}
+function subjectOf(b){
+  const s=(b.subjects||[]).find(x=>!/^(fiction|juvenile fiction|american fiction|english fiction|british fiction|literary criticism)/i.test(x))||(b.subjects||[])[0]||'Literature';
+  return s.replace(/\s*--.*$/,'').replace(/^["']|["']$/g,'').slice(0,28);
+}
+const metaLine=b=>[subjectOf(b),fmtReads(b.downloads)+' downloads'].join(' · ');
+const DULL=/biography|autobiography|correspondence|diaries|letters|composers|musicians|history|politics|science|religion|bible|biblical|testament|scripture|hymns|psalms|prayer book|catechism/i;
+const OMNIBUS=/complete works|collected works|the works of|volume\s+\d|vol\.\s*\d|selections/i;
+const isEnglish=b=>!b.languages||!b.languages.length||b.languages.includes('en');
+function nicePool(){
+  const all=(store.books.length?store.books:FALLBACK_BOOKS).filter(b=>b.cover&&b.title);
+  const ok=all.filter(b=>isEnglish(b)&&!DULL.test((b.subjects||[]).join(' '))&&!OMNIBUS.test(b.title));
+  return ok.length>=8?ok:all;
+}
+const firstSentence=s=>{
+  s=String(s||'').replace(/\s+/g,' ').trim();
+  if(!s)return '';
+  const re=/[.!?](?=\s|$)/g;
+  let m,start=0,parts=[];
+  while((m=re.exec(s))){
+    const end=m.index+1;
+    const before=s.slice(Math.max(0,m.index-6),end);
+    if(/\b(Mr|Mrs|Ms|Dr|St|Jr|Sr|etc|No)\.$/.test(before))continue;
+    parts.push(s.slice(start,end).trim());
+    start=end;
+    if(parts.length>=3)break;
+  }
+  let q=parts[0]||s;
+  for(let i=1;i<parts.length&&q.length<40;i++){
+    if((q+' '+parts[i]).length<=120)q+=' '+parts[i];else break;
+  }
+  if(q.length>120)q=q.slice(0,117).replace(/\s+\S*$/,'')+'…';
+  return q;
+};
+function cleanSummary(s){
+  s=String(s||'').replace(/[“”]/g,'"').replace(/\s+/g,' ').trim();
+  const m=s.match(/^"([^"]{2,120})"\s+by\s+([^.!?]{2,80}?)\s+(?:is|was)\s+(.+)$/i);
+  if(m)s=m[3];
+  s=s.replace(/^["']|["']$/g,'').trim();
+  if(s)s=s[0].toUpperCase()+s.slice(1);
+  return s;
+}
+function clipText(s,n=380){
+  s=String(s||'').trim();
+  if(s.length<=n)return s;
+  const cut=s.slice(0,n);
+  let last=-1,m;
+  const re=/[.!?](?=\s|$)/g;
+  while((m=re.exec(cut))){
+    if(m.index<100)continue;
+    const before=cut.slice(Math.max(0,m.index-6),m.index+1);
+    if(/\b(Mr|Mrs|Ms|Dr|St|Jr|Sr|etc)\.$/.test(before))continue;
+    last=m.index;
+  }
+  if(last>0)return cut.slice(0,last+1).trim()+' …';
+  const sp=cut.lastIndexOf(' ');
+  return (sp>100?cut.slice(0,sp):cut).trim()+'…';
+}
+const dateLine=new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long'}).toUpperCase();
+function coverHTML(book,cls=''){
+  const eager=cls.includes('big');
+  return `<div class="cover ${cls}">${book.cover?`<img src="${esc(book.cover)}" alt="" loading="${eager?'eager':'lazy'}" decoding="async" onerror="this.remove()">`:''}<div class="cfb"><span class="cfb-mark">Florilegium</span><span class="flower">${FLOWER_HEAD}</span><em>${esc(book.title)}</em><span class="cfb-author">${esc(book.author)}</span><span class="cfb-foot">Public domain</span></div></div>`;
+}
+const loaderHTML=(label='Sifting the stacks')=>`<div class="loader"><span class="flower">${FLOWER_HEAD}</span><span>${esc(label)}</span></div>`;
+/* ------------------------------------------------------------
+   screens
+------------------------------------------------------------ */
+let suppressClick=false;
+const TABS=[['home','Home',()=>I.home],['foryou','For you',()=>I.shuffle],['shelf','Shelf',()=>I.shelf],['profile','Profile',()=>I.user]];
+function renderTabbar(){
+  const bar=$('[data-tabbar]');if(!bar)return;
+  bar.innerHTML=TABS.map(([v,l,ic])=>`<button class="tab ${store.view===v?'on':''}" data-act="go" data-view="${v}" aria-label="${l}">${ic()}<span>${l}</span></button>`).join('');
+}
+function setView(v){
+  store.view=v;
+  $$('.view').forEach(x=>x.classList.toggle('active',x.dataset.view===v));
+  renderTabbar();
+  if(v==='foryou')renderForYou();
+  if(v==='shelf')renderShelf();
+  if(v==='profile')renderProfile();
+}
+function renderAll(){renderTabbar();renderHome();renderForYou();renderShelf();renderProfile();}
+
+function pickDaily(){
+  const pool=nicePool();
+  if(!pool.length)return;
+  const fresh=pool.filter(b=>!inShelf(b.id));
+  const source=fresh.length>=4?fresh:pool;
+  const prev=store.pick&&store.pick.id;
+  const others=source.filter(b=>b.id!==prev);
+  store.pick=rand(others.length?others:source);
+  const rec=(fresh.length>=5?fresh:pool).filter(b=>b.id!==store.pick.id);
+  store.recommended=shuffle(rec).slice(0,3);
+}
+function paintQuote(pick){
+  const ex=excerptCache.get(pick.id),el=$('[data-daily-quote]');
+  if(!ex||!el||!ex.paras.length)return;
+  const t=firstSentence(ex.paras[0]);
+  if(t)el.textContent='“'+t+'”';
+}
+function loadDailyQuote(){
+  const pick=store.pick;if(!pick)return;
+  if(excerptCache.has(pick.id)){paintQuote(pick);return;}
+  excerptFor(pick).then(()=>{if(store.pick&&store.pick.id===pick.id)paintQuote(pick);});
+}
+function renderHome(){
+  const el=$('[data-screen="home"]');if(!el)return;
+  const pick=store.pick;if(!pick)return;
+  const recs=store.recommended.length?store.recommended:FALLBACK_BOOKS.slice(1,4);
+  const saved=!!inShelf(pick.id);
+  el.innerHTML=`
+    <div class="home-head">
+      <div class="brand"><span>${FLOWER_HEAD}</span><span class="brand-name">Florilegium</span></div>
+      <button class="icon-btn" data-act="search" aria-label="Search">${I.search}</button>
+    </div>
+    <div class="home-meta"><span class="kicker">${dateLine}</span><span class="kicker">Vol. I — No. 001</span></div>
+    <section class="daily">
+      <div class="daily-top">
+        <span class="kicker">The daily folio</span>
+        <button class="sec-link" data-act="shuffle-daily">${I.loop} Another</button>
+      </div>
+      <div class="mat"><div class="daily-cover">${coverHTML(pick,'big')}</div></div>
+      <h1 class="daily-title">${esc(pick.title)}</h1>
+      <div class="daily-author">${esc(pick.author)}</div>
+      <div class="daily-meta">${esc(metaLine(pick))}</div>
+      <div class="daily-quote" data-daily-quote><span class="q-skel"></span><span class="q-skel short"></span></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" data-act="reader" data-id="${pick.id}">Read a little</button>
+        <button class="btn btn-ghost" data-act="save" data-id="${pick.id}">${saved?I.check+' Saved':I.bm+' Keep'}</button>
+      </div>
+    </section>
+    <section class="sec">
+      <div class="sec-head"><span class="kicker">Recommended</span><button class="sec-link" data-act="go" data-view="foryou">View all ${I.chev}</button></div>
+      ${recs.map((b,i)=>`<button class="row" data-act="preview" data-id="${b.id}">
+        <span class="row-no">0${i+1}</span>
+        ${coverHTML(b,'cover-thumb')}
+        <span class="row-main"><span class="row-title">${esc(b.title)}</span><span class="row-sub">${esc(b.author)} · ${esc(subjectOf(b))}</span></span>
+        <span class="row-arrow">${I.chev}</span>
+      </button>`).join('')}
+    </section>
+    <section class="sec">
+      <div class="sec-head"><span class="kicker">Browse the stacks</span><span class="kicker" style="color:var(--faint)">Public domain</span></div>
+      ${CATEGORIES.map(c=>`<button class="row browse-row" data-act="browse" data-topic="${esc(c.topic)}" data-label="${esc(c.label)}">
+        <span class="row-main"><span class="row-title">${esc(c.label)}</span><span class="row-sub">${esc(c.desc)}</span></span>
+        <span class="row-arrow">${I.right}</span>
+      </button>`).join('')}
+    </section>
+    <div class="foot">All texts public domain<br>Gutendex · Project Gutenberg</div>`;
+  loadDailyQuote();
+}
+
+function fyHead(total,index){
+  return `<div class="screen-head fy-head">
+    <div><div class="kicker">Discover</div><h1 class="screen-title">For you</h1></div>
+    <div class="counter">${String(index+1).padStart(2,'0')}<span> / ${String(total).padStart(2,'0')}</span></div>
+  </div>`;
+}
+function renderForYou(){
+  const el=$('[data-screen="foryou"]');if(!el)return;
+  const d=store.deck;
+  if(d.loading&&!d.books.length){el.innerHTML=fyHead(0,0)+loaderHTML('Shuffling the stacks');return;}
+  const b=d.books[d.index];
+  if(!b){
+    if(d.fetching){el.innerHTML=fyHead(d.books.length,d.books.length)+loaderHTML('Finding more books');return;}
+    el.innerHTML=fyHead(d.books.length,d.books.length)+`<div class="empty"><span class="flower">${FLOWER}</span><h3>That’s the folio for today.</h3><p>We’ve reached the end of this shuffle. Turn the deck over for a fresh set.</p><button class="btn btn-primary" data-act="reload-deck">Shuffle again</button></div>`;
+    return;
+  }
+  const total=d.books.length,left=Math.max(0,total-d.index-1);
+  el.innerHTML=`
+    ${fyHead(total,d.index)}
+    <div class="deck-label-row"><span class="kicker">Shuffled from the stacks</span><span class="kicker" style="color:var(--faint)">Tap to preview</span></div>
+    <div class="deck-wrap">
+      <div class="deck-card ghost g2"></div>
+      <div class="deck-card ghost g1"></div>
+      <article class="deck-card top" data-deck-top data-act="preview" data-id="${b.id}">
+        <div class="deck-cover">${coverHTML(b,'big')}</div>
+        <div class="deck-info">
+          <div class="deck-kicker"><span class="kicker">No. ${String(d.index+1).padStart(3,'0')}</span><span class="kicker" style="color:var(--faint)">Public domain</span></div>
+          <h2 class="deck-title">${esc(b.title)}</h2>
+          <div class="deck-author">${esc(b.author)}</div>
+          <div class="deck-meta">${esc(metaLine(b))}</div>
+          ${b.summary?`<div class="deck-desc">${esc(clipText(cleanSummary(b.summary),140))}</div>`:''}
+          <div class="deck-hint"><span>Tap to read the opening</span>${I.right}</div>
+        </div>
+      </article>
+    </div>
+    <div class="deck-actions">
+      <button class="btn btn-ghost" data-act="skip">${I.x} Skip</button>
+      <button class="btn btn-primary" data-act="keep">${I.bm} Keep</button>
+    </div>
+    <div class="deck-progress"><span class="progress"><i style="width:${((d.index+1)/Math.max(total,1))*100}%"></i></span><span class="deck-note">${left} left</span></div>`;
+  attachDeckSwipe();
+}
+function attachDeckSwipe(){
+  const card=$('[data-deck-top]');if(!card)return;
+  let sx=0,sy=0,dx=0,dragging=false;
+  card.addEventListener('pointerdown',e=>{
+    if(e.button&&e.button!==0)return;
+    dragging=true;sx=e.clientX;sy=e.clientY;dx=0;card.style.transition='none';
+    if(card.setPointerCapture)try{card.setPointerCapture(e.pointerId);}catch(err){}
+  });
+  card.addEventListener('pointermove',e=>{
+    if(!dragging)return;
+    dx=e.clientX-sx;const dy=e.clientY-sy;
+    if(Math.abs(dy)>Math.abs(dx)&&Math.abs(dy)>24)return;
+    card.style.transform=`translate(${dx}px,${dy*.18}px) rotate(${dx*.035}deg)`;
+  });
+  const end=()=>{
+    if(!dragging)return;dragging=false;card.style.transition='';
+    if(Math.abs(dx)>74){suppressClick=true;decideDeck(dx>0?'keep':'skip');}
+    else card.style.transform='';
+    dx=0;
+  };
+  card.addEventListener('pointerup',end);
+  card.addEventListener('pointercancel',end);
+}
+function decideDeck(kind){
+  const card=$('[data-deck-top]'),d=store.deck;
+  if(!card||d.busy||!d.books[d.index])return;
+  const b=d.books[d.index];
+  d.busy=true;
+  card.style.transition='transform .26s ease, opacity .26s ease';
+  card.style.transform=kind==='keep'?'translate(115%,-6px) rotate(9deg)':'translate(-115%,-6px) rotate(-9deg)';
+  card.style.opacity='0';
+  setTimeout(()=>{
+    if(kind==='keep'){
+      addToShelf(b);
+      toast('Kept — added to your shelf');
+      renderShelf();renderHome();
+    }
+    d.index++;d.busy=false;renderForYou();ensureDeckSupply();
+  },230);
+}
+async function ensureDeckSupply(){
+  const d=store.deck;
+  if(d.fetching||d.loading)return;
+  if(d.books.length-d.index>3)return;
+  d.fetching=true;renderForYou();
+  try{
+    const extra=(await fetchRandom()).filter(b=>b.cover&&!inShelf(b.id)&&!DULL.test((b.subjects||[]).join(' '))&&!OMNIBUS.test(b.title)&&!d.books.some(x=>x.id===b.id));
+    d.books.push(...shuffle(extra).slice(0,4));
+  }catch(e){}
+  d.fetching=false;renderForYou();
+}
+async function reloadDeck(){
+  const d=store.deck;
+  d.loading=true;renderForYou();
+  try{
+    const extra=(await fetchRandom()).filter(b=>b.cover&&!inShelf(b.id)&&!DULL.test((b.subjects||[]).join(' '))&&!OMNIBUS.test(b.title)&&!d.books.some(x=>x.id===b.id));
+    d.books.push(...extra);
+    if(d.index>=d.books.length)d.index=Math.max(0,d.books.length-extra.length);
+  }catch(e){}
+  d.loading=false;
+  if(d.index>=d.books.length)d.index=0;
+  renderForYou();
+}
+
+function renderShelf(){
+  const el=$('[data-screen="shelf"]');if(!el)return;
+  const total=store.shelf.length;
+  const counts={all:total,'to-read':0,reading:0,finished:0};
+  store.shelf.forEach(e=>counts[e.status]=(counts[e.status]||0)+1);
+  const filter=store.shelfFilter||'all';
+  const list=filter==='all'?store.shelf:store.shelf.filter(e=>e.status===filter);
+  const tabs=[['all','All'],['to-read','To read'],['reading','Reading'],['finished','Finished']];
+  el.innerHTML=`
+    <div class="screen-head"><div><div class="kicker">Collection</div><h1 class="screen-title">Your shelf</h1></div><div class="count-large">${String(total).padStart(2,'0')}</div></div>
+    <div class="shelf-summary"><span class="kicker">${total} ${total===1?'book':'books'}</span><span class="kicker">${counts.reading} reading · ${counts.finished} finished</span></div>
+    <div class="shelf-tabs">${tabs.map(([k,l])=>`<button class="shelf-tab ${filter===k?'on':''}" data-act="shelf-filter" data-filter="${k}">${l} <em>${counts[k]||0}</em></button>`).join('')}</div>
+    ${list.length?list.map(e=>`<button class="row" data-act="preview" data-id="${e.bookId}">
+      ${coverHTML(e.book,'cover-thumb')}
+      <span class="row-main"><span class="row-title">${esc(e.book.title)}</span><span class="row-sub">${esc(e.book.author)} · ${statusLabel[e.status]}</span></span>
+      <span class="row-arrow">${I.chev}</span>
+    </button>`).join(''):`<div class="empty"><span class="flower">${FLOWER}</span><h3>${filter==='all'?'Your shelf is empty.':'Nothing here yet.'}</h3><p>Keep a book from For You and it will live here.</p><button class="btn btn-primary" data-act="go" data-view="foryou">Find a book</button></div>`}
+    <div class="foot">Your shelf lives in this browser</div>`;
+}
+function renderProfile(){
+  const el=$('[data-screen="profile"]');if(!el)return;
+  const reading=store.shelf.filter(e=>e.status==='reading').length;
+  const finished=store.shelf.filter(e=>e.status==='finished').length;
+  const s=store.settings;
+  const themeName=s.theme[0].toUpperCase()+s.theme.slice(1);
+  const familyName=s.family[0].toUpperCase()+s.family.slice(1);
+  el.innerHTML=`
+    <div class="screen-head"><div><div class="kicker">Account</div><h1 class="screen-title">Profile</h1></div></div>
+    <div class="profile-hero">
+      <div class="monogram">${FLOWER_HEAD}</div>
+      <h2 class="profile-name">Daniel</h2>
+      <div class="kicker">Reader · since 2026</div>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>${store.shelf.length}</b><span>Saved</span></div>
+      <div class="stat"><b>${reading}</b><span>Reading</span></div>
+      <div class="stat"><b>${finished}</b><span>Finished</span></div>
+    </div>
+    <section class="sec">
+      <div class="sec-head"><span class="kicker">Preferences</span></div>
+      <button class="pref-row" data-act="settings"><span class="pref-label">Reader settings</span><span class="pref-value">${themeName} · ${familyName} · ${s.size}</span>${I.chev}</button>
+      <button class="pref-row" data-act="about"><span class="pref-label">About Florilegium</span><span class="pref-value">Prototype 02</span>${I.chev}</button>
+      <button class="pref-row" data-act="reset"><span class="pref-label">Reset demo</span><span class="pref-value">Clear</span>${I.chev}</button>
+    </section>
+    <div class="foot">Monochrome study · mobile only<br>Aesop · Monocle · Are.na · NYT Books</div>`;
+}
+let toastT;
+function toast(msg){
+  const el=$('[data-toast]');if(!el)return;
+  el.textContent=msg;el.classList.add('on');
+  clearTimeout(toastT);toastT=setTimeout(()=>el.classList.remove('on'),2400);
+}
+/* ------------------------------------------------------------
+   overlays
+------------------------------------------------------------ */
+const overlayStack=[];
+let overlayZ=0;
+function pushOverlay(cls,html){
+  const host=$('[data-overlays]');
+  const el=document.createElement('div');
+  el.className='overlay '+cls;
+  el.style.zIndex=String(++overlayZ);
+  el.innerHTML=html;
+  host.appendChild(el);
+  overlayStack.push(el);
+  document.body.classList.add('overlay-open');
+  requestAnimationFrame(()=>el.classList.add('open'));
+  return el;
+}
+function popOverlay(){
+  const el=overlayStack.pop();if(!el)return;
+  el.classList.remove('open');
+  setTimeout(()=>el.remove(),300);
+  if(!overlayStack.length){document.body.classList.remove('overlay-open');overlayZ=0;}
+}
+
+/* preview */
+function previewActions(book){
+  const saved=!!inShelf(book.id);
+  return `<button class="btn btn-primary" data-act="reader" data-id="${book.id}">Read a little</button>
+    <button class="btn btn-ghost" data-act="save" data-id="${book.id}">${saved?I.check+' On your shelf':I.bm+' Add to shelf'}</button>`;
+}
+function openPreview(book){
+  const saved=!!inShelf(book.id);
+  const desc=book.summary?clipText(cleanSummary(book.summary),380):`A public-domain edition from Project Gutenberg${book.subjects.length?', catalogued under '+book.subjects.slice(0,2).join(' and '):''}.`;
+  const el=pushOverlay('preview',`
+    <div class="sheet-head">
+      <button class="icon-btn" data-act="close" aria-label="Close">${I.x}</button>
+      <span class="kicker">Preview</span>
+      <button class="icon-btn" data-act="save" data-id="${book.id}" data-head-save aria-label="Save">${saved?I.bmFill:I.bm}</button>
+    </div>
+    <div class="preview-scroll">
+      <div class="preview-mat"><div class="preview-cover">${coverHTML(book,'big')}</div></div>
+      <div class="preview-body">
+        <div class="kicker">Public domain</div>
+        <h1 class="preview-title">${esc(book.title)}</h1>
+        <div class="preview-author">${esc(book.author)}</div>
+        <div class="preview-meta">${esc(metaLine(book))}</div>
+        <div class="sec-head" style="margin-top:22px"><span class="kicker">About</span><span class="kicker" style="color:var(--faint)">Gutendex</span></div>
+        <p class="preview-desc">${esc(desc)}</p>
+        <div class="sec-head" style="margin-top:24px"><span class="kicker">First pages</span><span class="kicker" style="color:var(--faint)">Excerpt</span></div>
+        <div class="preview-text" data-excerpt></div>
+        <div class="preview-end"><span class="kicker">End of preview</span></div>
+      </div>
+    </div>
+    <div class="preview-actions" data-preview-actions>${previewActions(book)}</div>`);
+  el.dataset.bookId=book.id;
+  loadPreviewText(el,book);
+}
+async function loadPreviewText(el,book){
+  const box=el.querySelector('[data-excerpt]');if(!box)return;
+  box.innerHTML=loaderHTML('Fetching the first pages');
+  const data=await excerptFor(book);
+  if(!el.isConnected)return;
+  if(data.paras.length){
+    box.innerHTML=data.paras.slice(0,3).map(p=>`<p>${esc(p)}</p>`).join('');
+  }else{
+    box.innerHTML=`<p class="muted">The opening pages could not be fetched for this edition.</p><button class="text-btn" data-act="retry-excerpt" data-id="${book.id}" style="margin-top:4px">Try again</button>`;
+  }
+}
+function refreshPreviewUI(book){
+  const saved=!!inShelf(book.id);
+  $$('.overlay.preview').forEach(el=>{
+    if(Number(el.dataset.bookId)!==book.id)return;
+    const actions=el.querySelector('[data-preview-actions]');if(actions)actions.innerHTML=previewActions(book);
+    const head=el.querySelector('[data-head-save]');if(head)head.innerHTML=saved?I.bmFill:I.bm;
+  });
+}
+function saveBook(book){
+  if(inShelf(book.id))return;
+  addToShelf(book);
+  refreshPreviewUI(book);
+  updateReaderSave(book);
+  renderHome();renderShelf();renderProfile();
+  toast('Added to your shelf');
+}
+
+/* reader */
+function readerEndHTML(book){
+  const saved=!!inShelf(book.id);
+  return `<div class="reader-end" data-reader-end>
+    <span class="kicker">End of preview</span>
+    <p>This prototype shows the opening pages. The full text is free at Project Gutenberg.</p>
+    <button class="btn ${saved?'btn-ghost':'btn-primary'}" data-act="save" data-id="${book.id}">${saved?I.check+' On your shelf':I.bm+' Add to shelf'}</button>
+  </div>`;
+}
+function updateReaderSave(book){
+  $$('.overlay.reader').forEach(el=>{
+    if(Number(el.dataset.bookId)!==book.id)return;
+    const end=el.querySelector('[data-reader-end]');if(end)end.outerHTML=readerEndHTML(book);
+  });
+}
+function applyReaderStyles(el){
+  const s=store.settings;
+  el.dataset.theme=s.theme;
+  el.style.setProperty('--reader-size',s.size+'px');
+  el.style.setProperty('--reader-pad',[16,24,32][s.margin]+'px');
+  el.style.setProperty('--reader-font',s.family==='sans'?'var(--sans)':'var(--serif)');
+}
+function renderReaderBody(el,book,data){
+  const paras=(data.paras||[]).slice(0,14);
+  const chs=data.blocks?chaptersOf(data.blocks):null;
+  let chapter=(chs&&chs[0]&&chs[0].title)?chs[0].title:'Chapter I';
+  chapter=chapter.replace(/^[\[\s]+|[\]\s]+$/g,'').replace(/\s{2,}/g,' ').trim()||'Chapter I';
+  const body=el.querySelector('[data-reader-body]');if(!body)return;
+  const noDrop=/^[A-Z][A-Z .'’\-]{2,}\./.test(paras[0]||'');
+  if(!paras.length){
+    body.innerHTML=`<div class="empty"><span class="flower">${FLOWER}</span><h3>The pages are quiet.</h3><p>The opening could not be fetched for this edition.</p><button class="btn btn-primary" data-act="retry-reader" data-id="${book.id}">Try again</button></div>`;
+    return;
+  }
+  body.innerHTML=`<div class="reader-chapter">${esc(chapter)}</div>`+
+    paras.map((p,i)=>`<p${i===0&&noDrop?' class="no-drop"':''}>${esc(p)}</p>`).join('')+readerEndHTML(book);
+}
+function openReader(book){
+  const el=pushOverlay('reader',`
+    <div class="reader-top">
+      <button class="icon-btn" data-act="close" aria-label="Back">${I.left}</button>
+      <span class="reader-top-title">${esc(book.title)}</span>
+      <button class="icon-btn" data-act="reader-settings" aria-label="Reading settings">${I.aa}</button>
+    </div>
+    <div class="reader-progress"><i data-rprog></i></div>
+    <div class="reader-scroll" data-reader-scroll><div class="reader-body" data-reader-body>${loaderHTML('Opening the book')}</div></div>`);
+  el.dataset.bookId=book.id;
+  applyReaderStyles(el);
+  const entry=inShelf(book.id);
+  if(entry&&entry.status==='to-read'){entry.status='reading';save();renderShelf();}
+  const sc=el.querySelector('[data-reader-scroll]');
+  sc.addEventListener('scroll',()=>{
+    const max=sc.scrollHeight-sc.clientHeight,p=max>0?sc.scrollTop/max:0;
+    const bar=el.querySelector('[data-rprog]');if(bar)bar.style.width=clamp(p*100,0,100)+'%';
+  },{passive:true});
+  excerptFor(book).then(data=>{if(el.isConnected)renderReaderBody(el,book,data);});
+}
+
+/* reading settings */
+function segHTML(key,opts){
+  return opts.map(([v,l])=>`<button data-act="set" data-set="${key}" data-value="${v}" class="${String(store.settings[key])===String(v)?'on':''}">${l}</button>`).join('');
+}
+function settingsHTML(){
+  return `<div class="sheet-mask" data-act="close"></div>
+  <div class="settings">
+    <div class="grab"></div>
+    <div class="sec-head"><span class="kicker">Reading preferences</span><button class="icon-btn" data-act="close" style="margin:0" aria-label="Close">${I.x}</button></div>
+    <div class="set-row"><div class="kicker">Appearance</div><div class="seg">${segHTML('theme',[['paper','Paper'],['white','White'],['night','Night']])}</div></div>
+    <div class="set-row"><div class="kicker">Typeface</div><div class="seg">${segHTML('family',[['serif','Serif'],['sans','Sans']])}</div></div>
+    <div class="set-row"><div class="kicker">Text size</div><div class="size-row">
+      <button class="size-btn" data-act="size" data-delta="-1" aria-label="Smaller">A−</button>
+      <span class="size-val" data-size-val>${store.settings.size} px</span>
+      <button class="size-btn" data-act="size" data-delta="1" aria-label="Larger">A+</button>
+    </div></div>
+    <div class="set-row"><div class="kicker">Margins</div><div class="seg">${segHTML('margin',[[0,'Narrow'],[1,'Regular'],[2,'Wide']])}</div></div>
+    <button class="btn btn-primary" data-act="close" style="width:100%;margin-top:12px">Done</button>
+  </div>`;
+}
+function refreshSettings(el){
+  if(!el)return;
+  $$('[data-set]',el).forEach(b=>b.classList.toggle('on',String(store.settings[b.dataset.set])===String(b.dataset.value)));
+  const v=$('[data-size-val]',el);if(v)v.textContent=store.settings.size+' px';
+  $$('.size-btn',el).forEach(b=>{const d=Number(b.dataset.delta);b.disabled=d<0?store.settings.size<=15:store.settings.size>=24;});
+}
+function openSettings(){
+  const el=pushOverlay('sheet-overlay',settingsHTML());
+  refreshSettings(el);
+}
+
+/* search */
+function searchRow(b){
+  return `<button class="row" data-act="preview" data-id="${b.id}">
+    ${coverHTML(b,'cover-thumb')}
+    <span class="row-main"><span class="row-title">${esc(b.title)}</span><span class="row-sub">${esc(b.author)} · ${esc(subjectOf(b))}</span></span>
+    <span class="row-arrow">${I.chev}</span>
+  </button>`;
+}
+const searchIdleHTML=()=>`<div class="search-idle"><span class="flower">${FLOWER}</span><p>Search eighty thousand public-domain books.</p></div>`;
+function dedupeBooks(books){
+  const seen=new Set();
+  return (books||[]).filter(b=>{
+    const key=(b.title||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim()+'|'+(b.author||'').toLowerCase();
+    if(seen.has(key))return false;
+    seen.add(key);return true;
+  });
+}
+function openSearch(){
+  const el=pushOverlay('search',`
+    <div class="search-head">
+      <label class="search-field">${I.search}<input type="text" inputmode="search" enterkeyhint="search" placeholder="Search titles or authors" autocomplete="off" spellcheck="false" data-search-input></label>
+      <button class="search-cancel" data-act="close">Cancel</button>
+    </div>
+    <div class="search-body" data-search-body>${searchIdleHTML()}</div>`);
+  const input=el.querySelector('[data-search-input]');
+  setTimeout(()=>{try{input.focus();}catch(e){}},320);
+  let timer;
+  input.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(()=>runSearch(input.value,el),380);});
+}
+async function runSearch(q,el){
+  q=q.trim();
+  const body=el.querySelector('[data-search-body]');if(!body)return;
+  if(q.length<2){body.innerHTML=searchIdleHTML();return;}
+  body.innerHTML=loaderHTML('Searching the stacks');
+  const token=++store.search.token;
+  try{
+    const raw=await fetchSearch(q);
+    const books=dedupeBooks(raw.books).filter(isEnglish);
+    const terms=q.toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(t=>t.length>1);
+    const relevant=terms.length?books.filter(b=>{
+      const hay=(b.title+' '+b.author+' '+(b.subjects||[]).join(' ')).toLowerCase();
+      return terms.every(t=>hay.includes(t));
+    }):books;
+    const list=relevant.length?relevant:books;
+    const count=list.length;
+    if(token!==store.search.token||!el.isConnected)return;
+    store.search={q,results:list,count,loading:false,token};
+    body.innerHTML=`<div class="result-meta"><span class="kicker">${count.toLocaleString()} results</span><span class="kicker" style="color:var(--faint)">Gutendex</span></div>`+
+      (list.length?list.map(searchRow).join(''):`<div class="empty"><span class="flower">${FLOWER}</span><h3>No books found.</h3><p>Try a different title, author, or subject.</p></div>`);
+  }catch(e){
+    console.warn('search failed', e);
+    if(el.isConnected)body.innerHTML=`<div class="empty"><span class="flower">${FLOWER}</span><h3>The stacks are quiet.</h3><p>The search could not reach Gutendex. Try again in a moment.</p></div>`;
+  }
+}
+
+/* browse */
+function openBrowse(label,topic){
+  const el=pushOverlay('browse',`
+    <div class="sheet-head">
+      <button class="icon-btn" data-act="close" aria-label="Back">${I.left}</button>
+      <span class="kicker">Browse</span>
+      <span style="width:38px"></span>
+    </div>
+    <div class="browse-head"><div class="kicker">Category</div><h1 class="browse-title">${esc(label)}</h1><div class="kicker" data-browse-count>Loading the shelf…</div></div>
+    <div class="browse-body" data-browse-body>${loaderHTML('Sifting the stacks')}</div>`);
+  fetchTopic(topic).then(({count,books})=>{
+    if(!el.isConnected)return;
+    const list=dedupeBooks(books).filter(isEnglish);
+    el.querySelector('[data-browse-count]').textContent=count.toLocaleString()+' books';
+    el.querySelector('[data-browse-body]').innerHTML=list.length?list.map(searchRow).join(''):`<div class="empty"><span class="flower">${FLOWER}</span><h3>Nothing on this shelf.</h3><p>Try another category.</p></div>`;
+  }).catch(err=>{
+    console.warn('browse failed', err);
+    if(el.isConnected){
+      const countEl=el.querySelector('[data-browse-count]');
+      if(countEl)countEl.textContent='Unavailable';
+      el.querySelector('[data-browse-body]').innerHTML=`<div class="empty"><span class="flower">${FLOWER}</span><h3>The shelf is quiet.</h3><p>The category could not be loaded.</p></div>`;
+    }
+  });
+}
+
+/* about + reset */
+function openAbout(){
+  pushOverlay('sheet-overlay',`<div class="sheet-mask" data-act="close"></div>
+    <div class="settings">
+      <div class="grab"></div>
+      <div class="sec-head"><span class="kicker">About</span><button class="icon-btn" data-act="close" style="margin:0" aria-label="Close">${I.x}</button></div>
+      <h2 class="about-title">Florilegium</h2>
+      <p class="sheet-note">A monochrome reading room for public-domain books. Recommendations come from Gutendex; covers and texts from Project Gutenberg; opening pages are fetched through Jina Reader. Your shelf and settings live in this browser.</p>
+      <div class="rule"></div>
+      <div class="kicker">Design references</div>
+      <p class="sheet-note">Aesop · Monocle · Are.na · NYT Books · Readwise Reader</p>
+      <div class="kicker">Prototype</div>
+      <p class="sheet-note">02 · October 2026 · mobile only</p>
+      <button class="btn btn-primary" data-act="close" style="width:100%;margin-top:16px">Done</button>
+    </div>`);
+}
+function openReset(){
+  pushOverlay('sheet-overlay',`<div class="sheet-mask" data-act="close"></div>
+    <div class="settings">
+      <div class="grab"></div>
+      <div class="sec-head"><span class="kicker">Reset demo</span><button class="icon-btn" data-act="close" style="margin:0" aria-label="Close">${I.x}</button></div>
+      <h2 class="about-title">Start fresh?</h2>
+      <p class="sheet-note">This clears the shelf and reading preferences saved in this browser, then restores the demo shelf.</p>
+      <div class="sheet-actions">
+        <button class="btn btn-primary" data-act="confirm-reset">Reset everything</button>
+        <button class="btn btn-ghost" data-act="close">Cancel</button>
+      </div>
+    </div>`);
+}
+/* ------------------------------------------------------------
+   interactions
+------------------------------------------------------------ */
+const app=$('#app');
+app.addEventListener('click',e=>{
+  const t=e.target.closest('[data-act]');if(!t)return;
+  const act=t.dataset.act;
+  if(suppressClick&&act==='preview'){suppressClick=false;return;}
+  switch(act){
+    case 'go': setView(t.dataset.view); break;
+    case 'close': popOverlay(); break;
+    case 'search': openSearch(); break;
+    case 'preview': {const b=bookById(t.dataset.id);if(b)openPreview(b);break;}
+    case 'reader': {const b=bookById(t.dataset.id);if(b)openReader(b);break;}
+    case 'save': {const b=bookById(t.dataset.id);if(b)saveBook(b);break;}
+    case 'skip': decideDeck('skip'); break;
+    case 'keep': decideDeck('keep'); break;
+    case 'shuffle-daily': pickDaily();renderHome();break;
+    case 'shelf-filter': store.shelfFilter=t.dataset.filter;renderShelf();break;
+    case 'browse': openBrowse(t.dataset.label,t.dataset.topic);break;
+    case 'reader-settings': openSettings();break;
+    case 'settings': openSettings();break;
+    case 'about': openAbout();break;
+    case 'reset': openReset();break;
+    case 'confirm-reset': try{localStorage.removeItem(LS);}catch(e){} location.reload();break;
+    case 'set': {
+      const k=t.dataset.set,v=t.dataset.value;
+      store.settings[k]=k==='margin'?Number(v):v;
+      save();
+      $$('.overlay.reader').forEach(applyReaderStyles);
+      refreshSettings(t.closest('.overlay'));
+      renderProfile();
+      break;
+    }
+    case 'size': {
+      store.settings.size=clamp(store.settings.size+Number(t.dataset.delta),15,24);
+      save();
+      $$('.overlay.reader').forEach(applyReaderStyles);
+      refreshSettings(t.closest('.overlay'));
+      renderProfile();
+      break;
+    }
+    case 'reload-deck': reloadDeck();break;
+    case 'retry-excerpt': {
+      const b=bookById(t.dataset.id),el=t.closest('.overlay');
+      if(b&&el)loadPreviewText(el,b);
+      break;
+    }
+    case 'retry-reader': {
+      const b=bookById(t.dataset.id),el=t.closest('.overlay');
+      if(b&&el){
+        const body=el.querySelector('[data-reader-body]');
+        if(body)body.innerHTML=loaderHTML('Opening the book');
+        excerptFor(b).then(d=>{if(el.isConnected)renderReaderBody(el,b,d);});
+      }
+      break;
+    }
+  }
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){if(overlayStack.length)popOverlay();return;}
+  if(!overlayStack.length&&store.view==='foryou'){
+    if(e.key==='ArrowLeft')decideDeck('skip');
+    if(e.key==='ArrowRight')decideDeck('keep');
+  }
+});
+
+/* ------------------------------------------------------------
+   boot
+------------------------------------------------------------ */
+function applyCatalogue(books){
+  if(!books.length)return false;
+  const interacted=store.deck.index>0||overlayStack.length>0;
+  const merged=[...books,...store.books.filter(b=>!books.some(x=>x.id===b.id))];
+  store.books=merged.filter((b,i)=>merged.findIndex(x=>x.id===b.id)===i);
+  if(!interacted){
+    const pickId=store.pick&&store.pick.id;
+    const recPool=nicePool().filter(b=>b.id!==pickId&&!inShelf(b.id));
+    store.recommended=shuffle(recPool.length>=3?recPool:nicePool().filter(b=>b.id!==pickId)).slice(0,3);
+  }
+  const pickId=store.pick&&store.pick.id;
+  let fresh=shuffle(books.filter(b=>b.cover&&b.title&&isEnglish(b)&&!inShelf(b.id)&&b.id!==pickId&&!DULL.test((b.subjects||[]).join(' '))&&!OMNIBUS.test(b.title)));
+  if(fresh.length<6)fresh=shuffle(books.filter(b=>b.cover&&b.title&&b.id!==pickId));
+  if(interacted){
+    const add=fresh.filter(b=>!store.deck.books.some(x=>x.id===b.id)).slice(0,10);
+    store.deck.books.push(...add);
+  }else{
+    const keep=store.deck.books.filter(b=>b.id!==pickId&&!fresh.some(x=>x.id===b.id));
+    store.deck.books=[...fresh,...keep].slice(0,14);
+    store.deck.index=0;
+  }
+  store.deck.loading=false;
+  renderAll();
+  return true;
+}
+function mergeCatalogue(more){
+  if(!more.length)return;
+  const have=new Set(store.books.map(b=>b.id));
+  const add=more.filter(b=>!have.has(b.id));
+  if(!add.length)return;
+  store.books.push(...add);
+  const pickId=store.pick&&store.pick.id;
+  const deckAdd=add.filter(b=>b.cover&&b.title&&isEnglish(b)&&!inShelf(b.id)&&b.id!==pickId&&!DULL.test((b.subjects||[]).join(' '))&&!OMNIBUS.test(b.title)&&!store.deck.books.some(x=>x.id===b.id)).slice(0,8);
+  if(deckAdd.length){
+    store.deck.books.push(...deckAdd);
+    if(store.view==='foryou')renderForYou();
+  }
+}
+async function loadCatalogue(attempt){
+  try{
+    const books=await fetchPopular();
+    if(!books.length)throw new Error('empty');
+    applyCatalogue(books);
+    fetchPopularPage(2).then(mergeCatalogue).catch(()=>{});
+  }catch(e){
+    if(attempt===0){
+      toast('Using the built-in shelf — the catalogue is slow');
+      setTimeout(()=>loadCatalogue(1),1500);
+    }
+  }
+}
+async function init(){
+  const had=loadSaved();if(!had)seedShelf();
+  /* an instant, curated folio and deck, before the network answers */
+  store.books=FALLBACK_BOOKS.slice();
+  pickDaily();
+  const pickId=store.pick&&store.pick.id;
+  const seedDeck=FALLBACK_BOOKS.filter(b=>!inShelf(b.id)&&b.id!==pickId);
+  store.deck.books=shuffle(seedDeck.length>=6?seedDeck:FALLBACK_BOOKS.filter(b=>b.id!==pickId));
+  store.deck.index=0;store.deck.loading=false;
+  renderAll();
+  loadCatalogue(0);
+  fetchRandom().then(extra=>{
+    const fresh=extra.filter(b=>b.cover&&b.title&&!store.books.some(x=>x.id===b.id));
+    if(!fresh.length)return;
+    store.books.push(...fresh);
+    const deckFresh=fresh.filter(b=>isEnglish(b)&&!inShelf(b.id)&&b.id!==pickId&&!DULL.test((b.subjects||[]).join(' '))&&!OMNIBUS.test(b.title)&&!store.deck.books.some(x=>x.id===b.id)).slice(0,3);
+    if(deckFresh.length){
+      store.deck.books.push(...deckFresh);
+      if(store.view==='foryou')renderForYou();
+    }
+  }).catch(()=>{});
+}
+init();
+</script>
+</body>
+</html>
