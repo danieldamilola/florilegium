@@ -539,7 +539,7 @@ function cleanBlocks(raw){
   for(let b of t.split(/\n{2,}/)){
     b=b.replace(/\n/g,' ').replace(/\s{2,}/g,' ').trim().replace(/^[#>*]+\s*/,'').replace(/^&gt;\s*/,'').replace(/^[_*]+|[_*]+$/g,'').trim();
     b=b.replace(/_([^_\n]{1,120})_/g,'$1').replace(/\*([^*\n]{1,120})\*/g,'$1').replace(/\[\d+\]/g,'').trim();
-    const head=/^(chapter|part|book|act|letter)\b/i.test(b)&&b.length<140;
+    const head=isHeading(b);
     if(!b||(b.length<42&&!head))continue;
     if(/^(project gutenberg|gutenberg|www\.gutenberg|\[illustration|illustration:|transcriber)/i.test(b))continue;
     if(b.includes('gutenberg.org')&&b.length<160)continue;
@@ -548,18 +548,65 @@ function cleanBlocks(raw){
   }
   return out;
 }
+/* A section heading is a chapter/part/book/act/letter marker, a numbered
+   story heading ("I. A SCANDAL IN BOHEMIA"), or a bare letter heading
+   ("Letter 1", "Letter I"). Epistolary captions such as
+   "Letter from Miss Mina Murray to Miss Lucy Westenra." and
+   "Letter, Mina Harker to Lucy Westenra." are prose subheads, not section
+   starts, so they are excluded. */
 const HEAD_RE=/^(chapter|part|book|act|letter)\b/i;
+const NUMBERED_HEAD_RE=/^(?:[IVXLCDM]+|\d+)[.)]\s+(\S.*)$/;
+/* Return a numbered story title when the block is "#. TITLE", else ''. */
+function numberedTitle(b){
+  const m=NUMBERED_HEAD_RE.exec(b);
+  if(!m)return '';
+  const title=m[1].trim();
+  if(title.length<3||title.length>80)return '';      /* length cap: rejects TOC runs and paragraphs */
+  if(title.indexOf(';')>=0)return '';                /* a list such as "I. THE FOLIO WHALE; II. ..." */
+  const letters=title.replace(/[^A-Za-z]/g,'');
+  if(letters.length<3)return '';
+  const caps=title.replace(/[^A-Z]/g,'');
+  return caps.length/letters.length>=0.6?title:'';   /* headings are short and mostly uppercase */
+}
+function isHeading(b){
+  if(!b||b.length>=140)return false;
+  if(HEAD_RE.test(b)){
+    /* "Letter 1"/"Letter I" stay headings; a "Letter" line naming from/to is a caption. */
+    if(/^letter\b/i.test(b)&&/\b(from|to)\b/i.test(b.slice(0,120)))return false;
+    return true;
+  }
+  return !!numberedTitle(b);
+}
+/* Collapse runs of consecutive heading blocks. A long run (>=4) is a table of
+   contents or index and starts nothing; a short run is a heading next to its
+   subheads, so keep only its first block. This neutralises Moby Dick's
+   135-line contents while preserving Dracula's "CHAPTER V" even when a
+   caption sits beside it. */
+function headingIndices(blocks){
+  const marks=[];
+  blocks.forEach((b,i)=>{if(isHeading(b))marks.push(i);});
+  const idx=[];
+  for(let i=0;i<marks.length;){
+    let j=i;while(j+1<marks.length&&marks[j+1]===marks[j]+1)j++;
+    if(j-i+1<4)idx.push(marks[i]);
+    i=j+1;
+  }
+  return idx;
+}
+/* Section titles never keep markdown emphasis or trailing punctuation. */
+function cleanTitle(b){
+  return String(b||'').replace(/^[\[\s]+|[\]\s]+$/g,'').replace(/\s{2,}/g,' ')
+    .replace(/[_*]/g,'').replace(/[\s.,;:]+$/,'').trim();
+}
 function chaptersOf(blocks){
-  const raw=[];
-  blocks.forEach((b,i)=>{if(HEAD_RE.test(b)&&b.length<140)raw.push(i);});
-  const set=new Set(raw),idx=raw.filter(i=>!set.has(i-1)&&!set.has(i+1));
-  if(idx.length>=3)return idx.map(start=>({title:blocks[start],start}));
+  const idx=headingIndices(blocks);
+  if(idx.length>=3)return idx.map(start=>({title:cleanTitle(blocks[start]),start}));
   const ch=[];
   for(let i=0;i<blocks.length;i+=14)ch.push({title:'',start:i});
   return ch;
 }
 function isProse(p){
-  if(!p||p.length<90||HEAD_RE.test(p))return false;
+  if(!p||p.length<90||isHeading(p))return false;
   const letters=p.replace(/[^A-Za-z]/g,''),caps=p.replace(/[^A-Z]/g,'');
   if(letters.length>20&&caps.length/letters.length>.8)return false;
   if((p.match(/\bCHAPTER\b/gi)||[]).length>1)return false;
@@ -574,7 +621,7 @@ function proseParas(blocks,n=5){
   if(chs&&chs.length&&chs[0].start>0)from=chs[0].start+(chs[0].title?1:0);
   const out=[];
   for(let i=from;i<blocks.length&&out.length<n;i++)if(isProse(blocks[i]))out.push(blocks[i].trim());
-  if(!out.length)for(let i=from;i<blocks.length&&out.length<n;i++){const p=blocks[i];if(p&&p.length>80&&!HEAD_RE.test(p))out.push(p.trim());}
+  if(!out.length)for(let i=from;i<blocks.length&&out.length<n;i++){const p=blocks[i];if(p&&p.length>80&&!isHeading(p))out.push(p.trim());}
   return out;
 }
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -1241,20 +1288,16 @@ function applyReaderStyles(el){
    are found) or fixed pages of ~22 paragraphs for chapterless editions.
    Only the current section is ever placed in the DOM. */
 function readerModel(blocks){
-  const marks=[];
-  blocks.forEach((b,i)=>{if(HEAD_RE.test(b)&&b.length<140)marks.push(i);});
-  const set=new Set(marks);
-  const idx=marks.filter(i=>!set.has(i-1)&&!set.has(i+1));
+  const idx=headingIndices(blocks);
   if(idx.length>=3){
     const sections=idx.map((start,k)=>{
       const end=k+1<idx.length?idx[k+1]:blocks.length;
-      const title=blocks[start].replace(/^[\[\s]+|[\]\s]+$/g,'').replace(/\s{2,}/g,' ').trim();
-      return {title,paras:blocks.slice(start+1,end)};
+      return {title:cleanTitle(blocks[start]),paras:blocks.slice(start+1,end)};
     }).filter(s=>s.paras.length);
     if(sections.length>=3)return {mode:'chapter',sections};
   }
   let pool=blocks.filter(p=>isProse(p));
-  if(pool.length<6)pool=blocks.filter(p=>!HEAD_RE.test(p));
+  if(pool.length<6)pool=blocks.filter(p=>!isHeading(p));
   if(!pool.length)pool=blocks.slice();
   const size=22,pages=[];
   for(let i=0;i<pool.length;i+=size)pages.push({title:'',paras:pool.slice(i,i+size)});
