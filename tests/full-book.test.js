@@ -53,6 +53,7 @@ const readerState=page=>page.evaluate(()=>{
     barWidth:(el.querySelector('[data-rprog]')||{}).style.width||'0%',
     endVisible:!!el.querySelector('[data-reader-end]'),
     endText:(el.querySelector('[data-reader-end]')||{}).textContent||'',
+    errorKind:el.dataset.readerError||'',
     fontSize:getComputedStyle(el.querySelector('[data-reader-body]')).fontSize
   };
 });
@@ -119,6 +120,28 @@ const readerState=page=>page.evaluate(()=>{
     assert(pageMode.sizes.length===3&&pageMode.sizes[0]===22&&pageMode.sizes[2]===6,
       'chapterless text is split into ~22-paragraph pages (got '+pageMode.sizes.join('/')+')');
 
+    /* failed deck supply exposes a retry instead of a dead end */
+    const deckState=await page.evaluate(()=>{
+      const d=store.deck;
+      const saved={books:d.books,index:d.index,error:d.error,loading:d.loading,fetching:d.fetching};
+      d.books=[];d.index=0;d.error=true;d.loading=false;d.fetching=false;
+      renderForYou();
+      const el=document.querySelector('[data-screen="foryou"]');
+      const out={retry:!!el.querySelector('[data-act="reload-deck"]'),text:el.textContent};
+      Object.assign(d,saved);renderForYou();
+      return out;
+    });
+    assert(deckState.retry&&/could not reach gutendex/i.test(deckState.text),'failed deck supply shows a Try again affordance');
+
+    /* the swipe click-suppression latch must not survive a bailed decideDeck */
+    const latch=await page.evaluate(()=>{
+      const d=store.deck,wasBusy=!!d.busy;
+      suppressClick=true;d.busy=true;decideDeck('keep');
+      const after=suppressClick;d.busy=wasBusy;
+      return after;
+    });
+    assert(latch===false,'suppressClick is cleared when decideDeck bails');
+
     /* close preview */
     await page.click('.overlay.preview .sheet-head [data-act="close"]');
     await page.waitForFunction(()=>!document.querySelector('.overlay.preview'),{timeout:5000});
@@ -153,6 +176,11 @@ const readerState=page=>page.evaluate(()=>{
     assert(st.paras>14,'first chapter renders more than 14 paragraphs ('+st.paras+')');
     assert(/^Chapter 1 of \d+$/.test(st.label),'progress reads "'+st.label+'"');
     assert(st.prevDisabled,'Previous is disabled on the first chapter');
+    const navBoxes=await page.evaluate(()=>['reader-prev','reader-next'].map(a=>{
+      const r=document.querySelector('.overlay.reader [data-act="'+a+'"]').getBoundingClientRect();
+      return {w:r.width,h:r.height};
+    }));
+    assert(navBoxes.every(b=>b.w>=44&&b.h>=44),'reader Prev/Next targets are at least 44x44');
     const firstText=st.first,firstBar=parseFloat(st.barWidth)||0;
 
     /* ---------------------------------------------------------------
@@ -241,34 +269,79 @@ const readerState=page=>page.evaluate(()=>{
     await page.waitForFunction(()=>!document.querySelector('.overlay'),{timeout:5000});
 
     /* ---------------------------------------------------------------
-       7. Failure path: inline reader error + retry; preview stays usable
+       7. Failure paths: 429 rate limit, retry, non-curated preview retry
     --------------------------------------------------------------- */
     console.log('\n[7] failure + retry');
-    let blocking=true;
+    let netMode='off'; /* off | rate | abort */
     await page.setRequestInterception(true);
     page.on('request',req=>{
-      const u=req.url();
-      if(blocking&&(u.includes('r.jina.ai')||u.includes('gutenberg.org')))return req.abort();
+      const u=req.url(),hit=u.includes('r.jina.ai')||u.includes('gutenberg.org');
+      if(netMode!=='off'&&hit){
+        if(netMode==='rate')return req.respond({
+          status:429,
+          headers:{'access-control-allow-origin':'*'},
+          contentType:'text/plain',
+          body:'rate limited'
+        });
+        return req.abort();
+      }
       return req.continue();
     });
 
+    /* 7a: a 429 from Jina must surface the distinct rate-limit message */
     await page.evaluate(()=>openPreview(bookById(1342)));
     await page.waitForFunction(()=>document.querySelectorAll('.overlay.preview [data-excerpt] p').length===3,{timeout:20000});
+    netMode='rate';
     await page.click('.overlay.preview [data-act="reader"]');
     await page.waitForFunction(()=>{
       const el=document.querySelector('.overlay.reader');
       return !!(el&&el.dataset.readerMode==='error');
-    },{timeout:45000});
+    },{timeout:90000});
     st=await readerState(page);
-    assert(st.mode==='error','failed fetch shows an inline reader error');
-    assert(await page.evaluate(()=>!!document.querySelector('.overlay.reader [data-act="retry-reader"]')),'error offers a Retry action');
+    assert(st.mode==='error','429 shows an inline reader error');
+    assert(st.errorKind==='rate','429 is surfaced as a rate-limit error (kind='+st.errorKind+')');
+    assert(/rate limited/i.test(st.label),'rate-limit label reads "'+st.label+'"');
+    const retryBox=await page.evaluate(()=>{
+      const r=document.querySelector('.overlay.reader [data-act="retry-reader"]').getBoundingClientRect();
+      return {w:r.width,h:r.height};
+    });
+    assert(retryBox.w>=44&&retryBox.h>=44,'reader Retry target is at least 44x44');
     assert(await page.evaluate(()=>document.querySelectorAll('.overlay.preview [data-excerpt] p').length===3),'preview underneath stays usable with 3 paragraphs');
 
-    blocking=false;
+    netMode='off';
     await page.click('.overlay.reader [data-act="retry-reader"]');
     await waitReader(page,{timeout:120000});
     st=await readerState(page);
-    assert((st.mode==='chapter'||st.mode==='page')&&st.paras>0,'retry loads the full book ('+st.mode+', '+st.paras+' paragraphs)');
+    assert((st.mode==='chapter'||st.mode==='page')&&st.paras>0,'retry after 429 loads the full book ('+st.mode+', '+st.paras+' paragraphs)');
+
+    await page.evaluate(()=>{while(overlayStack.length)popOverlay();});
+    await page.waitForFunction(()=>!document.querySelector('.overlay'),{timeout:5000});
+
+    /* 7b: an empty preview result must not be cached — Retry refetches */
+    console.log('\n[7b] non-curated preview retry');
+    await page.evaluate(()=>{
+      if(!bookById(1400))store.books.push({
+        id:1400,title:'Great Expectations',author:'Charles Dickens',
+        subjects:['Fiction'],downloads:1,cover:null,
+        textUrl:'https://www.gutenberg.org/cache/epub/1400/pg1400.txt'
+      });
+    });
+    netMode='abort';
+    await page.evaluate(()=>openPreview(bookById(1400)));
+    await page.waitForFunction(()=>!!document.querySelector('.overlay.preview [data-act="retry-excerpt"]'),{timeout:90000});
+    const failedPreview=await page.evaluate(()=>{
+      const box=document.querySelector('.overlay.preview [data-excerpt]');
+      const r=document.querySelector('.overlay.preview [data-act="retry-excerpt"]').getBoundingClientRect();
+      return {text:box.textContent,retry:{w:r.width,h:r.height}};
+    });
+    assert(/could not be fetched/i.test(failedPreview.text),'failed non-curated preview shows the inline error');
+    assert(failedPreview.retry.w>=44&&failedPreview.retry.h>=44,'preview Retry target is at least 44x44');
+    netMode='off';
+    await page.click('.overlay.preview [data-act="retry-excerpt"]');
+    await page.waitForFunction(()=>document.querySelectorAll('.overlay.preview [data-excerpt] p').length===3,{timeout:120000});
+    assert(true,'preview Retry refetches after an empty result (3 paragraphs)');
+    await page.evaluate(()=>{while(overlayStack.length)popOverlay();});
+    await page.waitForFunction(()=>!document.querySelector('.overlay'),{timeout:5000});
 
     /* ---------------------------------------------------------------
        8. No uncaught page errors
