@@ -511,6 +511,21 @@ async function fetchSearch(q){
 
 /* text */
 const textCache=new Map(),textPending=new Map(),textErrors=new Map(),excerptCache=new Map();
+/* Keep only the most recent full books in memory (plus the one on screen).
+   Map preserves insertion order, so the oldest key is the least recently used. */
+const TEXT_CACHE_MAX=6;
+let openTextId=null;
+function trimTextCache(){
+  const cap=TEXT_CACHE_MAX+(openTextId!=null?1:0);
+  while(textCache.size>cap){
+    const oldest=textCache.keys().next().value;
+    if(oldest===openTextId){ /* never evict the book being read; re-age it */
+      const v=textCache.get(oldest);textCache.delete(oldest);textCache.set(oldest,v);
+      continue;
+    }
+    textCache.delete(oldest);
+  }
+}
 function cleanBlocks(raw){
   let t=String(raw||'').replace(/\r/g,'');
   const s=t.search(/\*\*\*\s*START OF (THE|THIS) PROJECT GUTENBERG/i);
@@ -565,16 +580,26 @@ function proseParas(blocks,n=5){
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const isGutenbergURL=u=>{try{return /(^|\.)gutenberg\.org$/i.test(new URL(u).hostname);}catch(e){return false;}};
 /* r.jina.ai is limited to ~20 requests/min/IP, so keep exactly one Jina
-   request in flight (shared by every preview/reader path) and back off on
-   429, timeouts, network errors and 5xx. At most two retries per request. */
+   request in flight (shared by every preview/reader path). Each attempt is
+   bounded to ~22s and the caller passes an absolute deadline, so one slow
+   book can never hold the gate (and every other text load) for minutes.
+   Back off on 429/5xx/network blips; a timeout is not retried. */
 let jinaGate=Promise.resolve();
 const JINA_BACKOFF=[1000,3000];
-async function jinaFetch(url,ms=55000){
+const JINA_ATTEMPT_MS=22000;
+const TEXT_BUDGET_MS=60000;
+async function jinaFetch(url,ms=JINA_ATTEMPT_MS,deadline=0){
   const run=async()=>{
     let last=null;
     for(let attempt=0;attempt<=JINA_BACKOFF.length;attempt++){
+      const left=deadline?deadline-Date.now():Infinity;
+      if(deadline&&left<=500){
+        if(last)throw last;
+        const e=new Error('deadline exceeded');e.kind='timeout';throw e;
+      }
+      const at=Math.max(800,Math.min(ms,left));
       try{
-        const r=await jfetch(url,ms);
+        const r=await jfetch(url,at);
         return {text:await r.text(),status:r.status};
       }catch(e){
         last=e;
@@ -582,8 +607,9 @@ async function jinaFetch(url,ms=55000){
         if(rate)e.kind='rate';
         const status=(e&&e.status)||0;
         const retryable=rate||status>=500||(status===0&&e.kind!=='timeout');
-        if(attempt<JINA_BACKOFF.length&&retryable){
-          await sleep(JINA_BACKOFF[attempt]);
+        const wait=JINA_BACKOFF[attempt];
+        if(attempt<JINA_BACKOFF.length&&retryable&&(!deadline||Date.now()+wait+800<deadline)){
+          await sleep(wait);
           continue;
         }
         throw e;
@@ -607,12 +633,13 @@ function textSources(book){
 /* Gutenberg direct is CORS-blocked in the browser, so for those hosts we go
    straight to Jina Reader (a CORS-safe text proxy). Other mirrors get one
    direct attempt first, then the proxy. */
-async function tryTextSource(u,ms){
+async function tryTextSource(u,ms,deadline){
   if(!isGutenbergURL(u)){
-    try{const r=await jfetch(u,Math.min(ms,14000)),b=cleanBlocks(await r.text());if(b.length>6)return {blocks:b,rateLimited:false};}catch(e){}
+    const directMs=deadline?Math.max(800,Math.min(Math.min(ms,14000),deadline-Date.now())):Math.min(ms,14000);
+    try{const r=await jfetch(u,directMs),b=cleanBlocks(await r.text());if(b.length>6)return {blocks:b,rateLimited:false};}catch(e){}
   }
   try{
-    const res=await jinaFetch('https://r.jina.ai/'+u,ms),b=cleanBlocks(res.text);
+    const res=await jinaFetch('https://r.jina.ai/'+u,ms,deadline),b=cleanBlocks(res.text);
     if(b.length>6)return {blocks:b,rateLimited:false};
   }catch(e){
     return {blocks:null,rateLimited:!!(e&&(e.status===429||e.kind==='rate'))};
@@ -621,29 +648,40 @@ async function tryTextSource(u,ms){
 }
 async function getBookText(book,opts){
   const force=!!(opts&&opts.force);
-  if(!force&&textCache.has(book.id))return textCache.get(book.id);
+  if(!force&&textCache.has(book.id)){
+    const hit=textCache.get(book.id);
+    textCache.delete(book.id);textCache.set(book.id,hit); /* mark most-recently used */
+    return hit;
+  }
   if(!force&&textPending.has(book.id))return textPending.get(book.id);
   const p=(async()=>{
     const sources=textSources(book);
+    const deadline=Date.now()+TEXT_BUDGET_MS;
+    const left=()=>deadline-Date.now();
     let rateLimited=false;
     for(const u of sources){
-      const r=await tryTextSource(u,55000);
+      if(left()<=1200)break;
+      const r=await tryTextSource(u,JINA_ATTEMPT_MS,deadline);
       if(r.blocks)return r.blocks;
       if(r.rateLimited)rateLimited=true;
     }
     /* one patient retry on the canonical source: short for a plain network
-       blip, longer when the proxy explicitly said 429 */
-    await sleep(rateLimited?8000:900);
-    const r=await tryTextSource(sources[0],55000);
-    if(r.blocks)return r.blocks;
-    if(r.rateLimited)rateLimited=true;
+       blip, longer when the proxy explicitly said 429 — but only if the
+       overall budget still has room for it */
+    const backoff=rateLimited?8000:900;
+    if(left()>backoff+1500){
+      await sleep(backoff);
+      const r=await tryTextSource(sources[0],JINA_ATTEMPT_MS,deadline);
+      if(r.blocks)return r.blocks;
+      if(r.rateLimited)rateLimited=true;
+    }
     textErrors.set(book.id,{kind:rateLimited?'rate':'network',at:Date.now()});
     return null;
   })();
   textPending.set(book.id,p);
   let r=null;
   try{r=await p;}finally{textPending.delete(book.id);}
-  if(r&&r.length){textCache.set(book.id,r);textErrors.delete(book.id);}
+  if(r&&r.length){textCache.set(book.id,r);trimTextCache();textErrors.delete(book.id);}
   return r;
 }
 async function excerptFor(book){
@@ -1034,6 +1072,11 @@ function pushOverlay(cls,html){
 }
 function popOverlay(){
   const el=overlayStack.pop();if(!el)return;
+  if(el._reader){
+    saveReaderPos(el);
+    clearTimeout(el._reader.scrollT);
+    if(openTextId===el._reader.book.id)openTextId=null;
+  }
   el.classList.remove('open');
   setTimeout(()=>el.remove(),300);
   if(!overlayStack.length){document.body.classList.remove('overlay-open');overlayZ=0;}
@@ -1105,17 +1148,32 @@ const READER_LS='florilegium.reader.v1';
 function readPositions(){
   try{const d=JSON.parse(localStorage.getItem(READER_LS)||'{}');return d&&typeof d==='object'?d:{};}catch(e){return {};}
 }
-function savedIndex(bookId){
+/* A saved position is {index, frac}. Older entries may be a bare number or an
+   object without frac; both are accepted so nothing breaks on upgrade. */
+function savedPos(bookId){
   const p=readPositions()[bookId];
-  return p&&Number.isFinite(p.index)?Math.max(0,Math.floor(p.index)):0;
+  if(typeof p==='number')return {index:Math.max(0,Math.floor(p)),frac:0};
+  const index=p&&Number.isFinite(p.index)?Math.max(0,Math.floor(p.index)):0;
+  const frac=p&&Number.isFinite(p.frac)?clamp(p.frac,0,1):0;
+  return {index,frac};
 }
-function saveIndex(bookId,index){
+function savedIndex(bookId){return savedPos(bookId).index;}
+function savePos(bookId,index,frac){
   try{
     const all=readPositions();
-    all[bookId]={index,at:Date.now()};
+    all[bookId]={index,frac:clamp(Number(frac)||0,0,1),at:Date.now()};
     localStorage.setItem(READER_LS,JSON.stringify(all));
   }catch(e){}
 }
+function saveIndex(bookId,index){savePos(bookId,index,0);}
+function saveReaderPos(el){
+  const st=el&&el._reader;
+  if(!st||st.status!=='ready'||!st.book)return;
+  savePos(st.book.id,st.index,st.frac||0);
+}
+function saveOpenReaderPositions(){overlayStack.forEach(saveReaderPos);}
+window.addEventListener('pagehide',saveOpenReaderPositions);
+window.addEventListener('beforeunload',saveOpenReaderPositions);
 function readerEndHTML(book){
   const saved=!!inShelf(book.id);
   return `<div class="reader-end" data-reader-end>
@@ -1178,6 +1236,7 @@ function readerScrollProgress(el){
   const sc=el.querySelector('[data-reader-scroll]');
   const max=sc?sc.scrollHeight-sc.clientHeight:0;
   const intra=max>4?clamp(sc.scrollTop/max,0,1):0;
+  st.frac=intra;
   const p=clamp((st.index+intra)/st.total,0,1);
   const bar=el.querySelector('[data-rprog]');if(bar)bar.style.width=(p*100).toFixed(2)+'%';
 }
@@ -1194,12 +1253,16 @@ function paintReader(el){
   body.innerHTML=html;
   const label=el.querySelector('[data-rlabel]');if(label)label.textContent=readerLabel(st);
   readerSetNav(el,true);
-  const sc=el.querySelector('[data-reader-scroll]');if(sc)sc.scrollTop=0;
+  const sc=el.querySelector('[data-reader-scroll]');
+  if(sc){
+    const max=sc.scrollHeight-sc.clientHeight;
+    sc.scrollTop=st.frac>0&&max>4?Math.round(st.frac*max):0;
+  }
   el.dataset.readerMode=st.mode;
   el.dataset.readerTotal=String(st.total);
   el.dataset.readerIndex=String(st.index);
-  saveIndex(st.book.id,st.index);
-  readerScrollProgress(el);
+  readerScrollProgress(el); /* syncs st.frac to the restored scroll position */
+  saveReaderPos(el);
 }
 function readerLoading(el){
   const st=el._reader;if(!st)return;
@@ -1241,7 +1304,9 @@ async function loadReaderText(el,book){
   if(!blocks||!blocks.length){readerError(el,book);return;}
   const model=readerModel(blocks);
   st.blocks=blocks;st.sections=model.sections;st.mode=model.mode;st.total=model.sections.length;
-  st.index=clamp(savedIndex(book.id),0,Math.max(0,st.total-1));
+  const pos=savedPos(book.id);
+  st.index=clamp(pos.index,0,Math.max(0,st.total-1));
+  st.frac=pos.frac;
   st.status='ready';
   paintReader(el);
 }
@@ -1262,12 +1327,17 @@ function openReader(book){
       </div>
     </div>`);
   el.dataset.bookId=book.id;
-  el._reader={book,blocks:null,sections:null,mode:null,index:0,total:0,status:'loading',token:0,hintT:0};
+  el._reader={book,blocks:null,sections:null,mode:null,index:0,frac:0,total:0,status:'loading',token:0,hintT:0,scrollT:0};
+  openTextId=book.id;
   applyReaderStyles(el);
   const entry=inShelf(book.id);
   if(entry&&entry.status==='to-read'){entry.status='reading';save();renderShelf();}
   const sc=el.querySelector('[data-reader-scroll]');
-  sc.addEventListener('scroll',()=>readerScrollProgress(el),{passive:true});
+  if(sc)sc.addEventListener('scroll',()=>{
+    readerScrollProgress(el);
+    clearTimeout(el._reader.scrollT);
+    el._reader.scrollT=setTimeout(()=>saveReaderPos(el),250);
+  },{passive:true});
   loadReaderText(el,book);
 }
 function readerGo(el,d){
@@ -1275,6 +1345,7 @@ function readerGo(el,d){
   const to=clamp(st.index+d,0,st.total-1);
   if(to===st.index)return;
   st.index=to;
+  st.frac=0;
   paintReader(el);
 }
 
