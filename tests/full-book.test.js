@@ -57,6 +57,19 @@ const readerState=page=>page.evaluate(()=>{
     fontSize:getComputedStyle(el.querySelector('[data-reader-body]')).fontSize
   };
 });
+/* Hard DOM-isolation probe: only the current section may be in the DOM, never
+   the whole book. Compared against the live section and the full block count. */
+const domIsolation=page=>page.evaluate(()=>{
+  const el=document.querySelector('.overlay.reader');
+  if(!el||!el._reader)return null;
+  const st=el._reader;
+  const sec=(st.sections&&st.sections[st.index])||{paras:[]};
+  return {
+    rendered:el.querySelectorAll('[data-reader-body] p').length,
+    section:(sec.paras||[]).length,
+    total:(st.blocks||[]).length
+  };
+});
 
 (async()=>{
   let server=null,browser=null;
@@ -183,6 +196,11 @@ const readerState=page=>page.evaluate(()=>{
       return {w:r.width,h:r.height};
     }));
     assert(navBoxes.every(b=>b.w>=44&&b.h>=44),'reader Prev/Next targets are at least 44x44');
+    const isoFirst=await domIsolation(page);
+    info('dom first section: '+JSON.stringify(isoFirst));
+    assert(isoFirst&&isoFirst.rendered<=60,'DOM isolation on load: current section renders <=60 paragraphs (got '+(isoFirst&&isoFirst.rendered)+')');
+    assert(isoFirst&&isoFirst.rendered<=isoFirst.section,'DOM isolation on load: never renders beyond the current section ('+isoFirst.rendered+' of '+isoFirst.section+')');
+    assert(isoFirst&&isoFirst.rendered<isoFirst.total,'DOM isolation on load: never renders the whole book ('+isoFirst.rendered+' of '+isoFirst.total+' blocks)');
     const firstText=st.first,firstBar=parseFloat(st.barWidth)||0;
 
     /* ---------------------------------------------------------------
@@ -199,6 +217,11 @@ const readerState=page=>page.evaluate(()=>{
     assert(st.first!==firstText,'Next changes the rendered text');
     assert(!st.prevDisabled,'Previous is enabled on chapter 2');
     assert((parseFloat(st.barWidth)||0)>firstBar,'progress bar advances with the chapter');
+    const isoSecond=await domIsolation(page);
+    info('dom second section: '+JSON.stringify(isoSecond));
+    assert(isoSecond&&isoSecond.rendered<=60,'DOM isolation after navigation: chapter 2 renders <=60 paragraphs (got '+(isoSecond&&isoSecond.rendered)+')');
+    assert(isoSecond&&isoSecond.rendered<=isoSecond.section&&isoSecond.rendered<isoSecond.total,
+      'DOM isolation after navigation: only the current section is in the DOM ('+isoSecond.rendered+' of '+isoSecond.total+' blocks)');
 
     await page.click('.overlay.reader [data-act="reader-prev"]');
     await page.waitForFunction(()=>{
@@ -265,6 +288,43 @@ const readerState=page=>page.evaluate(()=>{
     st=await readerState(page);
     assert(st.index===total-1,'reopening restores the saved chapter ('+st.index+')');
     assert(st.endVisible,'reopened reader still lands on the end card');
+
+    /* ---------------------------------------------------------------
+       6b. An intra-chapter scroll fraction survives close/reopen
+    --------------------------------------------------------------- */
+    console.log('\n[6b] intra-chapter scroll fraction persists');
+    await page.evaluate(()=>{
+      const el=document.querySelector('.overlay.reader');
+      el._reader.index=0;el._reader.frac=0;paintReader(el);
+    });
+    await wait(200);
+    const scrollInfo=await page.evaluate(()=>{
+      const el=document.querySelector('.overlay.reader');
+      const sc=el.querySelector('[data-reader-scroll]');
+      const max=sc.scrollHeight-sc.clientHeight;
+      sc.scrollTop=Math.round(max*0.5);
+      return {max,top:sc.scrollTop};
+    });
+    assert(scrollInfo.max>100,'chapter 1 is long enough to scroll ('+scrollInfo.max+'px)');
+    await wait(600); /* let the throttled save land */
+    const fracStored=await page.evaluate(()=>{
+      try{return JSON.parse(localStorage.getItem('florilegium.reader.v1')||'{}')[2701];}catch(e){return null;}
+    });
+    assert(fracStored&&fracStored.index===0&&fracStored.frac>0.25&&fracStored.frac<0.75,
+      'scroll fraction is persisted (index '+(fracStored&&fracStored.index)+', frac '+(fracStored&&fracStored.frac)+')');
+    await page.evaluate(()=>{while(overlayStack.length)popOverlay();});
+    await page.waitForFunction(()=>!document.querySelector('.overlay'),{timeout:5000});
+    await page.evaluate(()=>openReader(bookById(2701)));
+    await waitReader(page);
+    const restored=await page.evaluate(()=>{
+      const el=document.querySelector('.overlay.reader');
+      const sc=el.querySelector('[data-reader-scroll]');
+      const max=sc.scrollHeight-sc.clientHeight;
+      return {index:el._reader.index,scrollFrac:max>4?sc.scrollTop/max:0};
+    });
+    info('restored scroll: '+JSON.stringify(restored));
+    assert(restored.index===0,'small move survives close/reopen in the same chapter ('+restored.index+')');
+    assert(restored.scrollFrac>0.25&&restored.scrollFrac<0.75,'small move survives close/reopen: fraction restored ('+restored.scrollFrac.toFixed(3)+')');
 
     /* close every overlay before the next scenario */
     await page.evaluate(()=>{while(overlayStack.length)popOverlay();});
@@ -371,10 +431,112 @@ const readerState=page=>page.evaluate(()=>{
     assert(leaked.length===0,'catalogue pools exclude shelf books in the main and fallback paths');
 
     /* ---------------------------------------------------------------
+       7d. Surface smoke: daily quote / shelf / search / browse
+    --------------------------------------------------------------- */
+    console.log('\n[7d] surface smoke');
+    await page.evaluate(()=>{store.pick=FALLBACK_BOOKS.find(b=>b.id&&EXCERPTS[b.id]);renderHome();});
+    await page.waitForFunction(()=>{
+      const q=document.querySelector('[data-daily-quote]');
+      return !!(q&&q.textContent.indexOf('\u201c')>=0&&q.textContent.length>8);
+    },{timeout:5000}).catch(()=>{});
+    const quoteSmoke=await page.evaluate(()=>{
+      const q=document.querySelector('[data-daily-quote]');
+      return (q&&q.textContent||'').trim();
+    });
+    assert(quoteSmoke.indexOf('\u201c')>=0&&quoteSmoke.length>8,'daily quote paints from the curated excerpt (got "'+quoteSmoke.slice(0,44)+'")');
+
+    const shelfSmoke=await page.evaluate(()=>{
+      setView('shelf');
+      const el=document.querySelector('[data-screen="shelf"]');
+      return {rows:el.querySelectorAll('[data-act="preview"]').length,total:store.shelf.length,title:(el.querySelector('.screen-title')||{}).textContent||''};
+    });
+    assert(shelfSmoke.total>0&&shelfSmoke.rows===shelfSmoke.total,'shelf lists every saved book ('+shelfSmoke.rows+' of '+shelfSmoke.total+')');
+    assert(/your shelf/i.test(shelfSmoke.title),'shelf screen renders its heading ("'+shelfSmoke.title.trim()+'")');
+
+    /* browse + search run against a stubbed catalogue so the smoke is deterministic */
+    await page.evaluate(()=>{
+      window.__floriFetch=window.fetch;
+      window.fetch=async(u,o)=>{
+        const url=String((u&&u.url)||u);
+        if(url.includes('gutendex.com/books')){
+          return {ok:true,status:200,json:async()=>({count:1,results:[{id:990001,title:'The Smoke Test',authors:[{name:'Doe, Jane'}],subjects:['Fiction'],download_count:12,languages:['en'],formats:{'image/jpeg':'http://127.0.0.1:4180/none.jpg','text/plain; charset=utf-8':'http://127.0.0.1:4180/none.txt'}}]})};
+        }
+        return window.__floriFetch(u,o);
+      };
+    });
+    try{
+      await page.evaluate(()=>openBrowse('Fiction','fiction'));
+      await page.waitForFunction(()=>{
+        const el=document.querySelector('.overlay.browse');
+        return !!(el&&el.querySelector('[data-browse-body] .row'));
+      },{timeout:8000});
+      const browseSmoke=await page.evaluate(()=>{
+        const el=document.querySelector('.overlay.browse');
+        return {rows:el.querySelectorAll('[data-browse-body] .row').length,title:(el.querySelector('.browse-title')||{}).textContent||''};
+      });
+      assert(browseSmoke.rows>=1&&/fiction/i.test(browseSmoke.title),'browse renders category results ('+browseSmoke.rows+' rows, "'+browseSmoke.title+'")');
+      await page.evaluate(()=>{while(overlayStack.length)popOverlay();});
+
+      await page.evaluate(()=>openSearch());
+      await page.evaluate(()=>{
+        const el=document.querySelector('.overlay.search');
+        const input=el.querySelector('[data-search-input]');
+        input.value='smoke';
+        input.dispatchEvent(new Event('input',{bubbles:true}));
+      });
+      await page.waitForFunction(()=>{
+        const el=document.querySelector('.overlay.search');
+        return !!(el&&el.querySelector('.result-meta'));
+      },{timeout:8000});
+      const searchSmoke=await page.evaluate(()=>{
+        const el=document.querySelector('.overlay.search');
+        return {rows:el.querySelectorAll('[data-search-body] .row').length,meta:(el.querySelector('.result-meta')||{}).textContent||''};
+      });
+      assert(searchSmoke.rows>=1,'search renders results from the catalogue ('+searchSmoke.rows+' rows)');
+    }finally{
+      await page.evaluate(()=>{
+        if(window.__floriFetch){window.fetch=window.__floriFetch;delete window.__floriFetch;}
+        while(overlayStack.length)popOverlay();
+      });
+    }
+    await page.waitForFunction(()=>!document.querySelector('.overlay'),{timeout:5000});
+
+    /* textCache LRU: keep ~6 recent full books, evict oldest-first */
+    const lru=await page.evaluate(()=>{
+      const savedMap=new Map(textCache),savedOpen=openTextId;
+      openTextId=null;textCache.clear();
+      for(let i=1;i<=12;i++){textCache.set(100000+i,['x']);trimTextCache();}
+      const size=textCache.size,keys=Array.from(textCache.keys());
+      textCache.clear();savedMap.forEach((v,k)=>textCache.set(k,v));openTextId=savedOpen;
+      return {size,newest:keys[keys.length-1],oldest:keys[0]};
+    });
+    info('textCache LRU: '+JSON.stringify(lru));
+    assert(lru.size===6,'textCache LRU keeps exactly 6 full books ('+lru.size+')');
+    assert(lru.newest===100012&&lru.oldest===100007,'textCache LRU evicts oldest-first, keeps newest ('+lru.oldest+'..'+lru.newest+')');
+
+    /* legacy reader positions (bare number, or object without frac) still load */
+    const legacy=await page.evaluate(()=>{
+      const all=readPositions(),saved=all[2701];
+      all[2701]=3;localStorage.setItem(READER_LS,JSON.stringify(all));
+      const bare=savedPos(2701);
+      all[2701]={index:5,at:1};localStorage.setItem(READER_LS,JSON.stringify(all));
+      const noFrac=savedPos(2701);
+      all[2701]=saved;localStorage.setItem(READER_LS,JSON.stringify(all));
+      return {bare,noFrac};
+    });
+    assert(legacy.bare.index===3&&legacy.bare.frac===0,'legacy number-only position still loads (index '+legacy.bare.index+')');
+    assert(legacy.noFrac.index===5&&legacy.noFrac.frac===0,'legacy position without a fraction defaults frac to 0 (index '+legacy.noFrac.index+')');
+
+    /* ---------------------------------------------------------------
        8. No uncaught page errors
     --------------------------------------------------------------- */
     console.log('\n[8] errors');
-    const unexpected=consoleErrors.filter(t=>!/Failed to load resource|net::ERR|favicon/i.test(t));
+    /* External best-effort fetches (Gutendex catalogue, Jina text proxy,
+       Gutenberg cover images) can emit CORS/network noise that the app
+       already handles; those are not app errors. Uncaught JS errors are
+       still asserted below. */
+    const externalNoise=/Failed to load resource|net::ERR|ERR_FAILED|favicon|blocked by CORS policy|Access to fetch at/i;
+    const unexpected=consoleErrors.filter(t=>!externalNoise.test(t));
     info('page errors: '+pageErrors.length+', console errors: '+consoleErrors.length+' ('+unexpected.length+' unexpected)');
     if(consoleErrors.length)consoleErrors.slice(0,5).forEach(t=>info('console: '+t.slice(0,160)));
     assert(pageErrors.length===0,'no uncaught page errors');
