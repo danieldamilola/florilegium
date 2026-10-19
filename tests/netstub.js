@@ -103,13 +103,14 @@ function hash(s) {
 
 /* ------------------------------------------------------------------ routing */
 
-function gutendexBody(url) {
+function gutendexBody(url, catalogue) {
+  const rows0 = (catalogue && catalogue.length) ? catalogue : MOCK_CATALOGUE;
   const q = new URL(url);
   const search = (q.searchParams.get('search') || '').toLowerCase();
   const topic = (q.searchParams.get('topic') || '').toLowerCase();
   const page = Number(q.searchParams.get('page') || '1');
 
-  let rows = MOCK_CATALOGUE.slice();
+  let rows = rows0.slice();
   if (search) {
     rows = rows.filter(b => (b.title + ' ' + b.author + ' ' + b.subjects.join(' ')).toLowerCase().includes(search));
   }
@@ -140,6 +141,14 @@ function gutendexBody(url) {
 
 /*
  * page.setRequestInterception(true) + respond from here.
+ *
+ * Runtime switches, flipped by tests between cases:
+ *   page.__netFailText    truthy  -> text origins answer 500 (plain network error)
+ *   page.__netTextStatus  number   -> gutenberg text status (429 fakes throttling)
+ *   page.__netJinaStatus  number   -> r.jina.ai status
+ *   page.__netFailApi     truthy  -> Gutendex answers 503 (deck/recs failure)
+ *   page.__net.catalogue  array    -> swap in a smaller catalogue
+ *
  * FLORI_LIVE=1 turns the stub off and lets Edge hit the real network.
  */
 async function installNetworkMock(page, opts = {}) {
@@ -147,8 +156,20 @@ async function installNetworkMock(page, opts = {}) {
   const text = buildText(opts.textOpts);
   const log = { live, textRequests: 0, apiRequests: 0, jinaRequests: 0, covers: 0, aborted: 0 };
   page.__net = log;
-  /* flip this mid-test to simulate a dead text origin */
+
   page.__netFailText = false;
+  page.__netTextStatus = 0;
+  page.__netJinaStatus = 0;
+  page.__netFailApi = false;
+  page.__net.catalogue = null;
+  /** Puts every knob back to its default. Call from a finally block. */
+  page.resetNet = () => {
+    page.__netFailText = false;
+    page.__netTextStatus = 0;
+    page.__netJinaStatus = 0;
+    page.__netFailApi = false;
+    page.__net.catalogue = null;
+  };
 
   if (live) {
     page.__netLive = true;
@@ -175,12 +196,21 @@ async function installNetworkMock(page, opts = {}) {
     };
 
     try {
-      if (host === 'gutendex.com') { log.apiRequests++; return respond(200, 'application/json', gutendexBody(url)); }
-      if (host === 'r.jina.ai') { log.jinaRequests++; return respond(page.__netFailText ? 500 : 200, 'text/plain; charset=utf-8', text); }
+      if (host === 'gutendex.com') {
+        log.apiRequests++;
+        if (page.__netFailApi) return respond(503, 'application/json', '{"detail":"service unavailable"}');
+        return respond(200, 'application/json', gutendexBody(url, page.__net.catalogue));
+      }
+      if (host === 'r.jina.ai') {
+        log.jinaRequests++;
+        const st = page.__netJinaStatus || (page.__netFailText ? 500 : 200);
+        return respond(st, 'text/plain; charset=utf-8', text);
+      }
       if (/gutenberg\.org$/.test(host)) {
         if (/\.(txt|html?|0\.txt)$/i.test(url)) {
           log.textRequests++;
-          return respond(page.__netFailText ? 500 : 200, 'text/plain; charset=utf-8', text);
+          const st = page.__netTextStatus || (page.__netFailText ? 500 : 200);
+          return respond(st, 'text/plain; charset=utf-8', text);
         }
         log.covers++;
         return respond(200, 'image/png', COVER_PNG);

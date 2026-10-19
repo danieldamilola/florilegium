@@ -51,7 +51,10 @@ No install step and no `package.json` on purpose: the repo is a single HTML file
 | `tests/e2e.test.js` | the 19 acceptance cases |
 | `tests/helpers.js` | static server, Edge launcher, error collection, `__QA` DOM probes, `advanceOnce()` |
 | `tests/netstub.js` | deterministic Gutendex / Project Gutenberg / Jina stubs, incl. a synthetic full Gutenberg text |
-| `tests/check-helpers.js` | self-check that the in-page helper bundle escaped correctly (also runnable alone) |
+| `tests/check-helpers.js` | self-check that the in-page helper bundle escaped correctly and parses (also runnable alone) |
+| `tests/live-verify.js` | standalone post-deploy gate against the public URL (no stub, real network) |
+| `tests/refcheck.js` | builds a throwaway copy of `index.html` from any git ref and runs the suite against it |
+
 
 ## Why a network stub
 
@@ -68,6 +71,15 @@ to tell "renders a full book" from "renders a preview".
 
 - **No test passes by timing out.** Every wait is bounded and every loop has a
   stall counter, so a dead reader fails in seconds with a readable reason.
+- **No serving the wrong build.** The static server takes its own free port and
+  fingerprints the bytes it serves against `index.html` on disk, so a leaked
+  server from an aborted run cannot silently validate a stale copy.
+- **The in-page bundle is a `String.raw` template** and is parse-checked by
+  `tests/check-helpers.js`. Two escaping bugs (a `\b` that became a backspace,
+  and a `\n` that broke the whole bundle) were caught this way.
+- **End-of-book detection is structural**, never a bare `the end`: a real book
+  contains "at the end of the Roman Republic" and tripped an earlier regex three
+  chapters into a 45-chapter novel.
 - **Implementation-agnostic probes.** `__QA` looks for "some paragraph
   container", "some next affordance", "some end marker" rather than hard-coded
   selectors, so the full-book rewrite can restructure the DOM without the suite
@@ -80,22 +92,59 @@ to tell "renders a full book" from "renders a preview".
   button inside an error state) are soft and are printed in the run summary.
   Product requirements are hard asserts.
 
-## Baseline status (commit `df6206e`, prototype)
+## Round-3 regression cases
 
-**16 pass / 3 fail, ~67 s.** The three failures are exactly the full-book
-requirement:
+Six cases guard the defects found in review of the full-book branch:
 
-1. `reader: renders the whole book, not a 14-paragraph preview`
-   — *max 7 paragraphs on screen, 7 distinct across 3 page turns*
-2. `reader: next/continue advances through the book and previous returns`
-   — *no paging action found in the reader overlay*
-3. `reader: shows progress/chapter position and reaches a true end of book`
-   — *walked 3 pages, 7 distinct openings, progress 0px -> 0px*
+| # | Case | What it pins down |
+| - | ---- | ------------------ |
+| 1 | `regression: preview exposes a "Read a little" action...` | the preview CTA label and that it opens the reader |
+| 2 | `regression: deck never offers shelf books...` | with a small catalogue that trips `applyCatalogue`'s fallback shuffle, no deck card may duplicate a shelf id, and every Keep must grow the shelf |
+| 3 | `regression: the seeded demo shelf is persisted...` | 4 demo rows, present in localStorage, identical ids/statuses after a reload |
+| 4 | `regression: a failed catalogue fetch ends the deck in a retryable state` | an outage must not be reported as "That's the folio for today."; retry must produce a card once the API returns |
+| 5 | `regression: a 429 from the text service...` | rate limiting is reported as such, Retry is a 44x44 target, and flipping the stub to 200 lets Retry open the chapters |
+| 6 | `regression: reader and preview controls are at least 44x44` | measured geometry of Prev/Next, reader Retry and preview Retry |
 
-Everything else — home, deck, preview, settings, save, shelf filters, search,
-browse, reset, zero page errors — already passes and now guards against
-regression.
+## Results
 
-The suite was validated in the other direction too: against a reference
-full-book reader (built in a throwaway copy outside the repo, never committed)
-all **19/19** cases pass in ~24 s.
+| build | pass / fail | failing cases |
+| ----- | ----------- | ------------- |
+| baseline `df6206e` | **17 / 25** | 4, 5, 6 (full book) · 18 (deck leaks shelf books) · 19 (shelf not persisted) · 20 (deck outage) · 21 (rate limit) · 22 (touch targets) |
+| full-book `3538c6a` | **21 / 25** | 3 + 17 ("Read a little") · 18 (deck leaks shelf books) · 19 (shelf not persisted) |
+
+The four failures on the implementation branch are exactly the round-3 items.
+Cases 20, 21 and 22 already pass there, so those fixes landed in 9ac9fa3/3538c6a.
+
+## Reference checks against any git ref
+
+```powershell
+$env:NODE_PATH="C:\Users\Daniel\AppData\Local\Temp\flori-tools\node_modules"
+node tests/refcheck.js build 3538c6a "$env:TEMP\flori-ref-impl"   # git show <ref>:index.html -> a temp dir
+node tests/refcheck.js run  "$env:TEMP\flori-ref-impl"             # run the suite against it
+```
+
+This is how "does the suite fail for the right reason?" is answered without
+touching the working tree. It also prints the app size it is testing.
+
+## Post-deploy gate (live URL)
+
+```powershell
+$env:NODE_PATH="C:\Users\Daniel\AppData\Local\Temp\flori-tools\node_modules"
+node tests/live-verify.js
+```
+
+`tests/live-verify.js` drives the deployed site with real Gutendex / Gutenberg /
+Jina at 390x844 and prints a PASS/FAIL checklist plus the tested URL; exit code 0
+means every check passed. It checks the user journey end to end: home, preview
+(cap of 3 paragraphs + END OF PREVIEW), the reader opening a real book,
+accumulating >= 40 distinct paragraphs across page turns, Next/Previous, a true
+end-of-book marker, saving from both the reader and a preview, and zero uncaught
+page errors.
+
+Unlike the stubbed suite it is deliberately tolerant of slow networks (generous
+per-step deadlines) and will try up to `FLORI_MAX_BOOKS` deck books, because a
+Gutenberg edition can be front matter or OCR noise. The full-book bar itself is
+never softened.
+
+Env: `FLORI_URL` (default `https://danieldamilola.github.io/florilegium/`),
+`FLORI_READ_TIMEOUT`, `FLORI_MAX_PAGES`, `FLORI_MAX_BOOKS`, `FLORI_HEADFUL=1`.

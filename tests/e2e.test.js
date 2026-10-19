@@ -901,18 +901,383 @@ test('reset flow: confirms, clears storage and restores the demo shelf', { timeo
   soft(!settings || settings.theme !== 'night', `reset must clear custom settings (${JSON.stringify(settings)})`);
 });
 
+/* =========================================================================
+   ROUND-3 REGRESSION CASES
+   Guards the specific defects found in review of the full-book branch:
+   the preview CTA rename, the deck leaking shelf books, the demo shelf not
+   being persisted, a dead deck with no way back, the r.jina.ai throttle path,
+   and undersized touch targets.
+   ========================================================================= */
+
+/* --- 1. the preview's primary CTA --------------------------------------- */
+
+test('regression: preview exposes a "Read a little" action that opens the reader', { timeout: 120000 }, async () => {
+  await fresh(READER_SEED);
+  const deck = await deckBook(page);
+  assert.ok(deck, 'deck offers a book');
+
+  assert.equal(await openPreviewForId(page, deck.id), true, 'preview sheet opened');
+
+  const cta = await page.evaluate(() => {
+    const ov = window.__QA.root(); if (!ov) return null;
+    const b = Array.from(ov.querySelectorAll('button,[data-act]'))
+      .filter(x => !x.disabled)
+      .find(x => x.getAttribute('data-act') === 'reader' || /read a little/i.test(x.innerText || ''));
+    if (!b) {
+      return {
+        missing: true,
+        labels: Array.from(ov.querySelectorAll('button')).map(x => (x.innerText || '').replace(/\s+/g, ' ').trim()).filter(Boolean)
+      };
+    }
+    return { label: (b.innerText || '').replace(/\s+/g, ' ').trim() };
+  });
+
+  assert.ok(cta && !cta.missing,
+    `preview must offer a "Read a little" action (buttons seen: ${(cta && cta.labels || []).join(' | ')})`);
+  assert.match(cta.label, /read a little/i,
+    `the preview read action must be labelled "Read a little" (saw "${cta.label}")`);
+
+  assert.equal(await H.openReaderById(page, deck.id), true, '"Read a little" opens the reader');
+  await settleReader(60000);
+  assert.ok(await reader(), 'reader is open after using the preview CTA');
+});
+
+/* --- 2. the deck must never offer a book that is already on the shelf ----- */
+
+test('regression: deck never offers shelf books and Keep always grows the shelf', { timeout: 240000 }, async () => {
+  /* A deliberately small catalogue that *contains the shelf books*, which is
+     the real-world shape (Gutendex returns the popular ones). With 8 rows and
+     4 already shelved, applyCatalogue() computes fresh.length < 6 and takes
+     its fallback shuffle - the exact path that leaked shelf books into the
+     deck. 8 - 4 = 4 also leaves enough unsaved books to exercise Keep. */
+  const tiny = [
+    { id: 1342, title: 'Pride and Prejudice', author: 'Jane Austen', subjects: ['Romance fiction'], downloads: 190246 },
+    { id: 1661, title: 'The Adventures of Sherlock Holmes', author: 'Arthur Conan Doyle', subjects: ['Detective fiction'], downloads: 62140 },
+    { id: 345, title: 'Dracula', author: 'Bram Stoker', subjects: ['Horror tales'], downloads: 55488 },
+    { id: 11, title: "Alice's Adventures in Wonderland", author: 'Lewis Carroll', subjects: ['Fantasy fiction'], downloads: 121623 },
+    { id: 768, title: 'Wuthering Heights', author: 'Emily Bronte', subjects: ['Romance fiction'], downloads: 71000 },
+    { id: 203, title: "Uncle Tom's Cabin", author: 'Harriet Beecher Stowe', subjects: ['Slavery -- Fiction'], downloads: 64000 },
+    { id: 1400, title: 'Great Expectations', author: 'Charles Dickens', subjects: ['Bildungsromans'], downloads: 68000 },
+    { id: 84, title: 'Frankenstein', author: 'Mary Wollstonecraft Shelley', subjects: ['Science fiction'], downloads: 144008 }
+  ];
+  const mk = (id, title, author, subjects, status, addedAt) => ({
+    bookId: id,
+    book: { id, title, author, subjects, downloads: 1, cover: null, textUrl: 'https://www.gutenberg.org/cache/epub/' + id + '/pg' + id + '.txt' },
+    status, addedAt
+  });
+  const seed = {
+    shelf: [
+      mk(1342, 'Pride and Prejudice', 'Jane Austen', ['Romance fiction'], 'reading', 4),
+      mk(1661, 'The Adventures of Sherlock Holmes', 'Arthur Conan Doyle', ['Detective fiction'], 'to-read', 3),
+      mk(345, 'Dracula', 'Bram Stoker', ['Horror tales'], 'to-read', 2),
+      mk(11, "Alice's Adventures in Wonderland", 'Lewis Carroll', ['Fantasy fiction'], 'finished', 1)
+    ],
+    settings: { theme: 'paper', family: 'serif', size: 18, margin: 1 }
+  };
+  page.resetNet();
+  page.__net.catalogue = tiny;
+  try {
+    await fresh(seed);
+    const shelfBefore = seed.shelf.map(s => String(s.bookId));
+
+    await H.nav(page, 'foryou');
+    // let the catalogue land and the deck settle
+    await new Promise(r => setTimeout(r, 2500));
+
+    const seenIds = [];
+    const offenders = [];
+    let keeps = 0, keepsWithoutEffect = 0;
+
+    for (let i = 0; i < 10; i++) {
+      const d = await page.evaluate(() => window.__QA.deckState());
+      if (!d) break;
+      if (d.empty || !d.topId) break;
+
+      if (shelfBefore.includes(String(d.topId)) && !seenIds.includes(String(d.topId))) {
+        offenders.push(`${d.topId} (${d.topTitle})`);
+      }
+      seenIds.push(String(d.topId));
+
+      const before = (await shelfIds()).length;
+      const acted = await page.evaluate(() => {
+        const el = document.querySelector('[data-screen="foryou"]');
+        const b = Array.from(el.querySelectorAll('button,[data-act]'))
+          .filter(x => !x.disabled && x.offsetParent !== null)
+          .find(x => x.getAttribute('data-act') === 'keep' || /\bkeep\b/i.test(x.innerText || ''));
+        if (!b) return false;
+        b.click(); return true;
+      });
+      if (!acted) break;
+      keeps++;
+
+      await new Promise(r => setTimeout(r, 700));
+      const after = (await shelfIds()).length;
+      if (after !== before + 1) keepsWithoutEffect++;
+      if (offenders.length) break;   // one is enough, and the run stays short
+    }
+
+    console.log(`    deck offered ${seenIds.length} cards (${seenIds.join(', ')}), ${keeps} keeps`);
+    assert.deepEqual(offenders, [],
+      `deck must never offer a book that is already on the shelf (${offenders.join(', ')})`);
+    assert.ok(keeps >= 2, `expected several deck cards to exercise Keep (saw ${keeps})`);
+    assert.equal(keepsWithoutEffect, 0,
+      `every Keep must add the book to the shelf (${keepsWithoutEffect} of ${keeps} keeps changed nothing)`);
+  } finally {
+    page.resetNet();
+  }
+});
+
+/* --- 3. the seeded demo shelf must survive a reload ----------------------- */
+
+test('regression: the seeded demo shelf is persisted and survives a reload', { timeout: 120000 }, async () => {
+  await fresh();                       // empty storage -> the app seeds its demo shelf
+
+  await H.nav(page, 'shelf');
+  const first = await page.evaluate(() => window.__QA.shelfState());
+  assert.ok(first, 'shelf screen rendered');
+  assert.equal(first.rows.length, 4, `a fresh profile shows the 4 demo shelf rows (saw ${first.rows.length}: ${first.rows.map(r => r.id).join(',')})`);
+
+  const stored = await page.evaluate(() => {
+    try {
+      const raw = localStorage.getItem('florilegium.mono.v1');
+      if (!raw) return null;
+      return (JSON.parse(raw).shelf || []).map(s => ({ id: String(s.bookId), status: s.status }));
+    } catch (e) { return null; }
+  });
+  assert.ok(stored, 'the seeded shelf must be written to localStorage, not held in memory only');
+  assert.equal(stored.length, 4, `localStorage holds the 4 demo books (saw ${stored.length})`);
+
+  const statusOf = rows => Object.fromEntries(rows.map(r => {
+    const m = /to read|reading|finished/i.exec(r.text || '');
+    return [r.id, m ? m[0].toLowerCase() : ''];
+  }));
+  const before = statusOf(first.rows);
+
+  await H.reload(page, server);
+  await H.nav(page, 'shelf');
+  const after = await page.evaluate(() => window.__QA.shelfState());
+  const afterStatus = statusOf(after.rows);
+
+  assert.deepEqual(after.rows.map(r => r.id).sort(), first.rows.map(r => r.id).sort(),
+    'the same shelf ids must be present after a reload');
+  for (const [id, st] of Object.entries(before)) {
+    assert.equal(afterStatus[id], st, `book ${id} keeps its "${st}" status across a reload`);
+  }
+  assert.equal(after.rows.length, 4, 'no rows lost or duplicated across the reload');
+});
+
+/* --- 4. the deck must survive a catalogue outage --------------------------- */
+
+test('regression: a failed catalogue fetch ends the deck in a retryable state', { timeout: 240000 }, async () => {
+  page.resetNet();
+  await fresh();
+  page.__netFailApi = true;
+  try {
+    await H.nav(page, 'foryou');
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Burn through the seeded deck; each fetch for more will fail.
+    let state = null;
+    for (let i = 0; i < 24; i++) {
+      state = await page.evaluate(() => window.__QA.deckState());
+      if (!state || state.empty) break;
+      const acted = await page.evaluate(() => {
+        const el = document.querySelector('[data-screen="foryou"]');
+        const b = Array.from(el.querySelectorAll('button,[data-act]'))
+          .filter(x => !x.disabled && x.offsetParent !== null)
+          .find(x => x.getAttribute('data-act') === 'skip' || /\bskip\b/i.test(x.innerText || ''));
+        if (!b) return false;
+        b.click(); return true;
+      });
+      if (!acted) break;
+      await new Promise(r => setTimeout(r, 550));
+    }
+
+    // Give the final failing supply request time to land.
+    for (let i = 0; i < 20; i++) {
+      state = await page.evaluate(() => window.__QA.deckState());
+      if (state && state.empty && !state.loading) break;
+      await new Promise(r => setTimeout(r, 400));
+    }
+
+    assert.ok(state, 'deck screen still responsive');
+    assert.equal(state.loading, false, 'deck must not sit on a loader after the outage');
+    assert.equal(state.empty, true, 'an exhausted, failing deck must show an explicit empty state');
+    assert.ok(!/folio for today/i.test(state.emptyText),
+      `a failed fetch must not be reported as a finished deck ("${state.emptyText}")`);
+    assert.ok(
+      state.emptyActions.some(t => /try again|retry|reload|shuffle again/i.test(t)),
+      `the failed deck state must offer a retry (buttons: ${state.emptyActions.join(' | ')})`
+    );
+
+    // Recovery: the catalogue comes back and retry produces a card.
+    page.__netFailApi = false;
+    await page.evaluate(() => {
+      const el = document.querySelector('[data-screen="foryou"]');
+      const b = Array.from(el.querySelectorAll('button,[data-act]'))
+        .filter(x => !x.disabled)
+        .find(x => /try again|retry|reload|shuffle again/i.test(x.innerText || ''));
+      if (b) b.click();
+    });
+
+    let recovered = null;
+    for (let i = 0; i < 30; i++) {
+      recovered = await page.evaluate(() => window.__QA.deckState());
+      if (recovered && !recovered.loading && (recovered.topId || recovered.empty)) break;
+      await new Promise(r => setTimeout(r, 400));
+    }
+    soft(recovered && (recovered.topId || recovered.empty),
+      'retry after a catalogue outage did not produce a card or an explicit state');
+    if (recovered && recovered.topId) {
+      soft(!!recovered.topTitle, 'recovered deck card has no title');
+    }
+  } finally {
+    page.resetNet();
+  }
+});
+
+/* --- 5. the r.jina.ai throttle path --------------------------------------- */
+
+test('regression: a 429 from the text service is reported as rate limiting and Retry recovers', { timeout: 300000 }, async () => {
+  page.resetNet();
+  await fresh(READER_SEED);
+  page.__netTextStatus = 429;
+  page.__netJinaStatus = 429;
+  try {
+    assert.equal(await H.openReaderById(page, NO_EXCERPT_BOOK.id), true, 'reader opened for a non-curated book');
+
+    const t0 = Date.now();
+    let s = null;
+    while (Date.now() - t0 < 120000) {
+      s = await reader();
+      if (s && s.hasLoader === false && s.errorState) break;
+      await new Promise(r => setTimeout(r, 500));
+    }
+    assert.ok(s, 'reader overlay present');
+    assert.equal(s.hasLoader, false, 'the reader must settle into an error state, not an endless loader');
+
+    const rateSpecific = s.rateLimited || /rate/i.test(s.errorKind || '') || /too many requests|rate.?limit|throttl/i.test(s.fullText || '');
+    assert.ok(rateSpecific,
+      `a 429 must be reported as rate limiting, not a generic failure (errorKind="${s.errorKind}", text="${(s.fullText || '').slice(0, 160)}")`);
+
+    const retry = await page.evaluate(() => {
+      const ov = window.__QA.readerRoot(); if (!ov) return null;
+      const b = Array.from(ov.querySelectorAll('button,[data-act]'))
+        .filter(x => !x.disabled)
+        .find(x => x.getAttribute('data-act') === 'retry-reader' || /try again|retry|reload/i.test(x.innerText || ''));
+      if (!b) return null;
+      const r = b.getBoundingClientRect();
+      return { label: (b.innerText || '').replace(/\s+/g, ' ').trim(), w: r.width, h: r.height };
+    });
+    assert.ok(retry, 'the rate-limit error must offer a Retry control');
+    assert.ok(retry.w >= 44 && retry.h >= 44, `Retry must be a 44x44 touch target (got ${Math.round(retry.w)}x${Math.round(retry.h)})`);
+
+    // The service recovers; retry must actually open the book.
+    page.__netTextStatus = 0;
+    page.__netJinaStatus = 0;
+    await page.evaluate(() => {
+      const ov = window.__QA.readerRoot(); if (!ov) return;
+      const b = Array.from(ov.querySelectorAll('button,[data-act]'))
+        .filter(x => !x.disabled)
+        .find(x => x.getAttribute('data-act') === 'retry-reader' || /try again|retry/i.test(x.innerText || ''));
+      if (b) b.click();
+    });
+
+    const t1 = Date.now();
+    let opened = null;
+    while (Date.now() - t1 < 120000) {
+      opened = await reader();
+      /* require a real chapter, not a transitional one-paragraph frame */
+      if (opened && opened.errorState === false && opened.paras > 14) break;
+      await new Promise(r => setTimeout(r, 500));
+    }
+    assert.ok(opened && opened.errorState === false,
+      `Retry after the service recovered must open the book (still: ${JSON.stringify((opened || {}).fullText || '').slice(0, 140)})`);
+    assert.ok(opened.paras > 14,
+      `the recovered reader must show real chapters, not a stub (${opened.paras} paragraphs)`);
+    assert.ok(!!opened.chapter, 'the recovered reader shows a chapter marker');
+  } finally {
+    page.resetNet();
+  }
+});
+
+/* --- 6. touch targets ------------------------------------------------------ */
+
+test('regression: reader and preview controls are at least 44x44', { timeout: 180000 }, async () => {
+  await fresh(READER_SEED);
+  page.__netFailText = true;
+  try {
+    /* a) reader Prev / Next, with the reader in its error state (Retry) */
+    assert.equal(await H.openReaderById(page, NO_EXCERPT_BOOK.id), true, 'reader opened');
+    const t0 = Date.now();
+    while (Date.now() - t0 < 60000) {
+      const s = await reader();
+      if (s && s.errorState) break;
+      await new Promise(r => setTimeout(r, 400));
+    }
+    const readerTargets = await page.evaluate(() => window.__QA.touchTargets());
+    const pick = (list, re) => list.find(t => re.test(t.act) || re.test(t.label));
+
+    const prev = pick(readerTargets, /reader-prev|previous|^prev$/i);
+    const next = pick(readerTargets, /reader-next|next/i);
+    const readerRetry = pick(readerTargets, /retry-reader|try again/i);
+
+    assert.ok(prev, `reader exposes a Previous control (saw ${readerTargets.map(t => t.act || t.label).join(' | ')})`);
+    assert.ok(next, 'reader exposes a Next control');
+    assert.ok(prev.w >= 44 && prev.h >= 44, `Previous must be >=44x44 (got ${prev.w}x${prev.h})`);
+    assert.ok(next.w >= 44 && next.h >= 44, `Next must be >=44x44 (got ${next.w}x${next.h})`);
+    if (readerRetry) {
+      assert.ok(readerRetry.w >= 44 && readerRetry.h >= 44,
+        `reader Retry must be >=44x44 (got ${readerRetry.w}x${readerRetry.h})`);
+    } else {
+      softNote('reader showed no error-state Retry to measure (text fetch may have been cached)');
+    }
+    await H.closeAllOverlays(page);
+
+    /* b) the preview's Retry */
+    await H.nav(page, 'shelf');
+    const row = await page.evaluate(() => {
+      const r = document.querySelector('[data-screen="shelf"] [data-act="preview"]');
+      if (!r) return null;
+      r.click(); return r.getAttribute('data-id');
+    });
+    assert.ok(row, 'a shelf row opens a preview');
+    await page.waitForFunction(() => (window.__QA.previewState() || {}).open === true, { timeout: 15000 });
+    for (let i = 0; i < 30; i++) {
+      const pv = await H.previewState(page);
+      if (pv && pv.error) break;
+      await new Promise(r => setTimeout(r, 400));
+    }
+    const previewTargets = await page.evaluate(() => window.__QA.touchTargets());
+    const pRetry = pick(previewTargets, /retry-excerpt|try again/i);
+    assert.ok(pRetry, `the preview failure state offers a Retry (saw ${previewTargets.map(t => t.act || t.label).join(' | ')})`);
+    assert.ok(pRetry.w >= 44 && pRetry.h >= 44, `preview Retry must be >=44x44 (got ${pRetry.w}x${pRetry.h})`);
+  } finally {
+    page.resetNet();
+  }
+});
+
 /* ==================================================== SUITE SELF-CHECKS ==== */
 
 test('suite: the in-page helper bundle escapes correctly', () => {
-  const { bad, evaluated } = require('./check-helpers').inspectHelpers();
+  const { problems, evaluated, usesRaw } = require('./check-helpers').inspectHelpers();
   assert.deepEqual(
-    bad.map(b => ({ code: b.code, at: b.at })), [],
-    'QA_HELPERS template literal produced control characters (single backslash escapes)'
+    problems.map(p => ({ code: p.code, at: p.at })), [],
+    'the QA_HELPERS bundle must have no control characters and must parse: ' + JSON.stringify(problems).slice(0, 400)
   );
+  assert.equal(usesRaw, true, 'QA_HELPERS must be a String.raw template so backslashes survive');
   assert.ok(evaluated.includes('readerState'), 'helper bundle exposes readerState');
-  assert.ok(/end of \(the \)\?book\\b/.test(evaluated), 'end-of-book detector keeps its word boundaries');
+  assert.ok(evaluated.includes('function endState'), 'helper bundle has the end-of-book detector');
+  /* The detector must keep real escapes and must not fall back to matching
+     bare prose like "at the end of the Roman Republic", which a real book
+     contains. `split("\n")` here means a literal backslash-n in the bundle. */
+  assert.ok(evaluated.includes('split("\\n")'), 'endState must split on a real newline escape');
+  assert.ok(evaluated.includes('MARK=/^(end of (the )?book'), 'endState marker regex must be intact');
+  assert.ok(evaluated.includes(
+    "replace(/[\\s\\u00b7\\u2022.\\-\\u2014:]+$/,\"\")"
+  ), 'endState must keep its whitespace class escapes');
+  assert.ok(!/\|quiet\//.test(evaluated), "errorState must not match bare 'quiet' (it occurs in ordinary prose)");
 });
-
 /* ========================================================= NO PAGE ERRORS ==== */
 
 test('no uncaught page errors across the whole walkthrough', { timeout: 300000 }, async () => {
