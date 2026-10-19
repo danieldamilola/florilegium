@@ -211,7 +211,7 @@ input{font:inherit;color:inherit}
 /* reader */
 .overlay.reader{background:var(--paper);color:var(--ink)}
 .overlay.reader[data-theme="white"]{background:#fff}
-.overlay.reader[data-theme="night"]{background:#101010;color:#EFEDE6;--muted:#A6A39A;--faint:#77746C;--line:rgba(255,255,255,.18);--wash:#1C1C1A}
+.overlay.reader[data-theme="night"]{background:#101010;color:#EFEDE6;--muted:#A6A39A;--faint:#77746C;--line:rgba(255,255,255,.18);--line-strong:rgba(255,255,255,.34);--wash:#1C1C1A}
 .reader-top{height:56px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;border-bottom:1px solid var(--line)}
 .reader-top .icon-btn{margin:0}
 .reader-top .icon-btn:first-child{margin-left:-7px}
@@ -230,6 +230,20 @@ input{font:inherit;color:inherit}
 .reader-end p{font-family:var(--sans);font-size:11px;line-height:1.65;color:var(--muted);margin:10px auto 18px;max-width:250px}
 .reader[data-theme="night"] .btn-primary{background:#EFEDE6;color:#101010}
 .reader[data-theme="night"] .btn-ghost{background:transparent;border-color:rgba(255,255,255,.32);color:#EFEDE6}
+.reader-foot{flex:none;display:flex;align-items:center;gap:12px;padding:9px var(--pad) calc(9px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:inherit}
+.reader-progress-label{flex:1;min-width:0;font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.reader-nav{display:flex;align-items:center;gap:8px;flex:none}
+.reader-nav button{height:36px;min-width:38px;padding:0 13px;border:1px solid var(--line-strong);border-radius:999px;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:9px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;transition:opacity .15s ease}
+.reader-nav button svg{width:14px;height:14px}
+.reader-nav button:disabled{opacity:.28}
+.reader-nav .next{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.reader-nav .next:disabled{background:transparent;border-color:var(--line-strong);color:var(--muted)}
+.reader[data-theme="night"] .reader-nav .next{background:#EFEDE6;border-color:#EFEDE6;color:#101010}
+.reader[data-theme="night"] .reader-nav .next:disabled{background:transparent;border-color:var(--line-strong);color:var(--muted)}
+.reader-loading{padding-top:8px}
+.reader-loading .loader{padding-bottom:0}
+.reader-hint{margin:0;font-size:8.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);text-align:center}
+.reader-error{padding-top:52px}
 
 /* settings / info sheets */
 .overlay.sheet-overlay{background:transparent}
@@ -376,6 +390,8 @@ const I={
 
 const GB=id=>`https://www.gutenberg.org/cache/epub/${id}/pg${id}.cover.medium.jpg`;
 const GF=id=>`https://www.gutenberg.org/files/${id}/${id}-0.txt`;
+/* modern Gutenberg layout — the source that Jina proxies most reliably */
+const GT=id=>`https://www.gutenberg.org/cache/epub/${id}/pg${id}.txt`;
 const FALLBACK_BOOKS=[
   {id:1342,title:'Pride and Prejudice',author:'Jane Austen',subjects:['Romance','Fiction'],downloads:190246,cover:GB(1342),textUrl:GF(1342)},
   {id:2701,title:'Moby Dick; Or, The Whale',author:'Herman Melville',subjects:['Adventure stories','Sea stories'],downloads:165720,cover:GB(2701),textUrl:GF(2701)},
@@ -532,39 +548,63 @@ function proseParas(blocks,n=5){
   if(!out.length)for(let i=from;i<blocks.length&&out.length<n;i++){const p=blocks[i];if(p&&p.length>80&&!HEAD_RE.test(p))out.push(p.trim());}
   return out;
 }
-async function getBookText(book){
-  if(textCache.has(book.id))return textCache.get(book.id);
-  if(textPending.has(book.id))return textPending.get(book.id);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const isGutenbergURL=u=>{try{return /(^|\.)gutenberg\.org$/i.test(new URL(u).hostname);}catch(e){return false;}};
+/* Candidate sources, most reliable first. The modern cache/epub layout is
+   the one r.jina.ai returns fastest and most completely. */
+function textSources(book){
+  const id=book.id,out=[],add=u=>{if(u&&!out.includes(u))out.push(u);};
+  add(GT(id));
+  add(book.textUrl);
+  if(!book.textUrl)add(book.htmlUrl);
+  return out.slice(0,3);
+}
+/* Gutenberg direct is CORS-blocked in the browser, so for those hosts we go
+   straight to Jina Reader (a CORS-safe text proxy). Other mirrors get one
+   direct attempt first, then the proxy. */
+async function tryTextSource(u,ms){
+  if(!isGutenbergURL(u)){
+    try{const r=await jfetch(u,Math.min(ms,14000)),b=cleanBlocks(await r.text());if(b.length>6)return b;}catch(e){}
+  }
+  try{
+    const r=await jfetch('https://r.jina.ai/'+u,ms),b=cleanBlocks(await r.text());
+    if(b.length>6)return b;
+  }catch(e){}
+  return null;
+}
+async function getBookText(book,opts){
+  const force=!!(opts&&opts.force);
+  if(!force&&textCache.has(book.id))return textCache.get(book.id);
+  if(!force&&textPending.has(book.id))return textPending.get(book.id);
   const p=(async()=>{
-    const urls=[book.textUrl,book.htmlUrl].filter(Boolean),tryUrl=async u=>{
-      try{const r=await jfetch(u,20000),b=cleanBlocks(await r.text());if(b.length>6)return b;}catch(e){}
-      try{const r=await jfetch('https://r.jina.ai/'+u,30000),b=cleanBlocks(await r.text());if(b.length>6)return b;}catch(e){}
-      return null;
-    };
-    for(const u of urls){const r=await tryUrl(u);if(r)return r;}
-    return null;
+    const sources=textSources(book);
+    for(const u of sources){
+      const b=await tryTextSource(u,55000);
+      if(b)return b;
+    }
+    /* one patient retry on the canonical source (transient proxy errors) */
+    await sleep(900);
+    return await tryTextSource(sources[0],55000);
   })();
   textPending.set(book.id,p);
-  const r=await p;textPending.delete(book.id);textCache.set(book.id,r);return r;
+  let r=null;
+  try{r=await p;}finally{textPending.delete(book.id);}
+  if(r&&r.length)textCache.set(book.id,r);
+  return r;
 }
 async function excerptFor(book){
   if(excerptCache.has(book.id))return excerptCache.get(book.id);
   if(EXCERPTS[book.id]){
+    /* instant: the preview never waits for, or triggers, the full text */
     const out={paras:EXCERPTS[book.id],blocks:null,live:false};
     excerptCache.set(book.id,out);
-    /* upgrade in the background if the full text arrives later */
-    getBookText(book).then(blocks=>{
-      if(!blocks)return;
-      const ps=proseParas(blocks,14);
-      if(ps.length>EXCERPTS[book.id].length)excerptCache.set(book.id,{paras:ps,blocks,live:true});
-    }).catch(()=>{});
     return out;
   }
   const blocks=await getBookText(book);
   let out={paras:[],blocks:null,live:false};
   if(blocks&&blocks.length){
     const ps=proseParas(blocks,6);
-    if(ps.length)out={paras:ps,blocks,live:true};
+    if(ps.length)out={paras:ps,blocks:null,live:true};
   }
   if(!out.paras.length&&EXCERPTS[book.id])out={paras:EXCERPTS[book.id],blocks:null,live:false};
   excerptCache.set(book.id,out);
@@ -736,7 +776,7 @@ function renderHome(){
       <div class="daily-meta">${esc(metaLine(pick))}</div>
       <div class="daily-quote" data-daily-quote><span class="q-skel"></span><span class="q-skel short"></span></div>
       <div class="btn-row">
-        <button class="btn btn-primary" data-act="reader" data-id="${pick.id}">Read a little</button>
+        <button class="btn btn-primary" data-act="reader" data-id="${pick.id}">Start reading</button>
         <button class="btn btn-ghost" data-act="save" data-id="${pick.id}">${saved?I.check+' Saved':I.bm+' Keep'}</button>
       </div>
     </section>
@@ -945,7 +985,7 @@ function popOverlay(){
 /* preview */
 function previewActions(book){
   const saved=!!inShelf(book.id);
-  return `<button class="btn btn-primary" data-act="reader" data-id="${book.id}">Read a little</button>
+  return `<button class="btn btn-primary" data-act="reader" data-id="${book.id}">Start reading</button>
     <button class="btn btn-ghost" data-act="save" data-id="${book.id}">${saved?I.check+' On your shelf':I.bm+' Add to shelf'}</button>`;
 }
 function openPreview(book){
@@ -1004,11 +1044,26 @@ function saveBook(book){
 }
 
 /* reader */
+const READER_LS='florilegium.reader.v1';
+function readPositions(){
+  try{const d=JSON.parse(localStorage.getItem(READER_LS)||'{}');return d&&typeof d==='object'?d:{};}catch(e){return {};}
+}
+function savedIndex(bookId){
+  const p=readPositions()[bookId];
+  return p&&Number.isFinite(p.index)?Math.max(0,Math.floor(p.index)):0;
+}
+function saveIndex(bookId,index){
+  try{
+    const all=readPositions();
+    all[bookId]={index,at:Date.now()};
+    localStorage.setItem(READER_LS,JSON.stringify(all));
+  }catch(e){}
+}
 function readerEndHTML(book){
   const saved=!!inShelf(book.id);
   return `<div class="reader-end" data-reader-end>
-    <span class="kicker">End of preview</span>
-    <p>This prototype shows the opening pages. The full text is free at Project Gutenberg.</p>
+    <span class="kicker">End of book</span>
+    <p>You have reached the end of <em>${esc(book.title)}</em>. This edition is in the public domain and free to read at Project Gutenberg.</p>
     <button class="btn ${saved?'btn-ghost':'btn-primary'}" data-act="save" data-id="${book.id}">${saved?I.check+' On your shelf':I.bm+' Add to shelf'}</button>
   </div>`;
 }
@@ -1025,19 +1080,107 @@ function applyReaderStyles(el){
   el.style.setProperty('--reader-pad',[16,24,32][s.margin]+'px');
   el.style.setProperty('--reader-font',s.family==='sans'?'var(--sans)':'var(--serif)');
 }
-function renderReaderBody(el,book,data){
-  const paras=(data.paras||[]).slice(0,14);
-  const chs=data.blocks?chaptersOf(data.blocks):null;
-  let chapter=(chs&&chs[0]&&chs[0].title)?chs[0].title:'Chapter I';
-  chapter=chapter.replace(/^[\[\s]+|[\]\s]+$/g,'').replace(/\s{2,}/g,' ').trim()||'Chapter I';
-  const body=el.querySelector('[data-reader-body]');if(!body)return;
-  const noDrop=/^[A-Z][A-Z .'’\-]{2,}\./.test(paras[0]||'');
-  if(!paras.length){
-    body.innerHTML=`<div class="empty"><span class="flower">${FLOWER}</span><h3>The pages are quiet.</h3><p>The opening could not be fetched for this edition.</p><button class="btn btn-primary" data-act="retry-reader" data-id="${book.id}">Try again</button></div>`;
-    return;
+/* A book becomes either real chapters (when at least three distinct headings
+   are found) or fixed pages of ~22 paragraphs for chapterless editions.
+   Only the current section is ever placed in the DOM. */
+function readerModel(blocks){
+  const marks=[];
+  blocks.forEach((b,i)=>{if(HEAD_RE.test(b)&&b.length<140)marks.push(i);});
+  const set=new Set(marks);
+  const idx=marks.filter(i=>!set.has(i-1)&&!set.has(i+1));
+  if(idx.length>=3){
+    const sections=idx.map((start,k)=>{
+      const end=k+1<idx.length?idx[k+1]:blocks.length;
+      const title=blocks[start].replace(/^[\[\s]+|[\]\s]+$/g,'').replace(/\s{2,}/g,' ').trim();
+      return {title,paras:blocks.slice(start+1,end)};
+    }).filter(s=>s.paras.length);
+    if(sections.length>=3)return {mode:'chapter',sections};
   }
-  body.innerHTML=`<div class="reader-chapter">${esc(chapter)}</div>`+
-    paras.map((p,i)=>`<p${i===0&&noDrop?' class="no-drop"':''}>${esc(p)}</p>`).join('')+readerEndHTML(book);
+  let pool=blocks.filter(p=>isProse(p));
+  if(pool.length<6)pool=blocks.filter(p=>!HEAD_RE.test(p));
+  if(!pool.length)pool=blocks.slice();
+  const size=22,pages=[];
+  for(let i=0;i<pool.length;i+=size)pages.push({title:'',paras:pool.slice(i,i+size)});
+  return {mode:'page',sections:pages};
+}
+function readerLabel(st){
+  return st.mode==='chapter'?`Chapter ${st.index+1} of ${st.total}`:`Page ${st.index+1} of ${st.total}`;
+}
+function readerSetNav(el,ready){
+  const st=el._reader;if(!st)return;
+  const prev=el.querySelector('[data-act="reader-prev"]');
+  const next=el.querySelector('[data-act="reader-next"]');
+  if(prev)prev.disabled=!ready||st.index<=0;
+  if(next){
+    next.disabled=!ready||st.index>=st.total-1;
+    next.innerHTML='Next '+I.right;
+  }
+}
+function readerScrollProgress(el){
+  const st=el._reader;if(!st||!st.total)return;
+  const sc=el.querySelector('[data-reader-scroll]');
+  const max=sc?sc.scrollHeight-sc.clientHeight:0;
+  const intra=max>4?clamp(sc.scrollTop/max,0,1):0;
+  const p=clamp((st.index+intra)/st.total,0,1);
+  const bar=el.querySelector('[data-rprog]');if(bar)bar.style.width=(p*100).toFixed(2)+'%';
+}
+function paintReader(el){
+  const st=el._reader;if(!st||!st.sections||!st.sections.length)return;
+  const sec=st.sections[st.index];
+  const body=el.querySelector('[data-reader-body]');if(!body)return;
+  const paras=sec.paras||[];
+  const noDrop=/^[A-Z][A-Z .'’\-]{2,}\./.test(paras[0]||'');
+  let html='';
+  if(st.mode==='chapter'&&sec.title)html+=`<div class="reader-chapter">${esc(sec.title)}</div>`;
+  html+=paras.map((p,i)=>`<p${i===0&&noDrop?' class="no-drop"':''}>${esc(p)}</p>`).join('');
+  if(st.index>=st.total-1)html+=readerEndHTML(st.book);
+  body.innerHTML=html;
+  const label=el.querySelector('[data-rlabel]');if(label)label.textContent=readerLabel(st);
+  readerSetNav(el,true);
+  const sc=el.querySelector('[data-reader-scroll]');if(sc)sc.scrollTop=0;
+  el.dataset.readerMode=st.mode;
+  el.dataset.readerTotal=String(st.total);
+  el.dataset.readerIndex=String(st.index);
+  saveIndex(st.book.id,st.index);
+  readerScrollProgress(el);
+}
+function readerLoading(el){
+  const st=el._reader;if(!st)return;
+  const body=el.querySelector('[data-reader-body]');if(!body)return;
+  body.innerHTML=`<div class="reader-loading">${loaderHTML('Fetching the full text')}<p class="reader-hint" data-reader-hint>Long books can take a few seconds.</p></div>`;
+  const label=el.querySelector('[data-rlabel]');if(label)label.textContent='Opening the book';
+  readerSetNav(el,false);
+  const bar=el.querySelector('[data-rprog]');if(bar)bar.style.width='0%';
+  el.dataset.readerMode='loading';el.dataset.readerTotal='0';el.dataset.readerIndex='0';
+  clearTimeout(st.hintT);
+  st.hintT=setTimeout(()=>{
+    if(!el.isConnected||st.status!=='loading')return;
+    const h=el.querySelector('[data-reader-hint]');
+    if(h)h.textContent='Still fetching this edition — large books take a moment.';
+  },12000);
+}
+function readerError(el,book){
+  const st=el._reader;if(st)st.status='error';
+  const body=el.querySelector('[data-reader-body]');if(!body)return;
+  body.innerHTML=`<div class="empty reader-error"><span class="flower">${FLOWER}</span><h3>The book did not open.</h3><p>The full text could not be fetched just now. Your preview is still here, and you can try again.</p><button class="btn btn-primary" data-act="retry-reader" data-id="${book.id}">Try again</button></div>`;
+  const label=el.querySelector('[data-rlabel]');if(label)label.textContent='Full text unavailable';
+  readerSetNav(el,false);
+  el.dataset.readerMode='error';el.dataset.readerTotal='0';el.dataset.readerIndex='0';
+}
+async function loadReaderText(el,book){
+  const st=el._reader;if(!st)return;
+  const token=++st.token;
+  st.status='loading';
+  readerLoading(el);
+  let blocks=null;
+  try{blocks=await getBookText(book);}catch(e){blocks=null;}
+  if(!el.isConnected||token!==st.token)return;
+  if(!blocks||!blocks.length){readerError(el,book);return;}
+  const model=readerModel(blocks);
+  st.blocks=blocks;st.sections=model.sections;st.mode=model.mode;st.total=model.sections.length;
+  st.index=clamp(savedIndex(book.id),0,Math.max(0,st.total-1));
+  st.status='ready';
+  paintReader(el);
 }
 function openReader(book){
   const el=pushOverlay('reader',`
@@ -1047,17 +1190,29 @@ function openReader(book){
       <button class="icon-btn" data-act="reader-settings" aria-label="Reading settings">${I.aa}</button>
     </div>
     <div class="reader-progress"><i data-rprog></i></div>
-    <div class="reader-scroll" data-reader-scroll><div class="reader-body" data-reader-body>${loaderHTML('Opening the book')}</div></div>`);
+    <div class="reader-scroll" data-reader-scroll><div class="reader-body" data-reader-body></div></div>
+    <div class="reader-foot">
+      <span class="reader-progress-label" data-rlabel>Opening the book</span>
+      <div class="reader-nav">
+        <button data-act="reader-prev" aria-label="Previous page">${I.left}</button>
+        <button class="next" data-act="reader-next" aria-label="Next page">Next ${I.right}</button>
+      </div>
+    </div>`);
   el.dataset.bookId=book.id;
+  el._reader={book,blocks:null,sections:null,mode:null,index:0,total:0,status:'loading',token:0,hintT:0};
   applyReaderStyles(el);
   const entry=inShelf(book.id);
   if(entry&&entry.status==='to-read'){entry.status='reading';save();renderShelf();}
   const sc=el.querySelector('[data-reader-scroll]');
-  sc.addEventListener('scroll',()=>{
-    const max=sc.scrollHeight-sc.clientHeight,p=max>0?sc.scrollTop/max:0;
-    const bar=el.querySelector('[data-rprog]');if(bar)bar.style.width=clamp(p*100,0,100)+'%';
-  },{passive:true});
-  excerptFor(book).then(data=>{if(el.isConnected)renderReaderBody(el,book,data);});
+  sc.addEventListener('scroll',()=>readerScrollProgress(el),{passive:true});
+  loadReaderText(el,book);
+}
+function readerGo(el,d){
+  const st=el&&el._reader;if(!st||st.status!=='ready'||!st.sections)return;
+  const to=clamp(st.index+d,0,st.total-1);
+  if(to===st.index)return;
+  st.index=to;
+  paintReader(el);
 }
 
 /* reading settings */
@@ -1178,7 +1333,7 @@ function openAbout(){
       <div class="grab"></div>
       <div class="sec-head"><span class="kicker">About</span><button class="icon-btn" data-act="close" style="margin:0" aria-label="Close">${I.x}</button></div>
       <h2 class="about-title">Florilegium</h2>
-      <p class="sheet-note">A monochrome reading room for public-domain books. Recommendations come from Gutendex; covers and texts from Project Gutenberg; opening pages are fetched through Jina Reader. Your shelf and settings live in this browser.</p>
+      <p class="sheet-note">A monochrome reading room for public-domain books. Recommendations come from Gutendex; covers and texts from Project Gutenberg; full texts are fetched through Jina Reader. Your shelf, reading positions, and settings live in this browser.</p>
       <div class="rule"></div>
       <div class="kicker">Design references</div>
       <p class="sheet-note">Aesop · Monocle · Are.na · NYT Books · Readwise Reader</p>
@@ -1224,7 +1379,7 @@ app.addEventListener('click',e=>{
     case 'settings': openSettings();break;
     case 'about': openAbout();break;
     case 'reset': openReset();break;
-    case 'confirm-reset': try{localStorage.removeItem(LS);}catch(e){} location.reload();break;
+    case 'confirm-reset': try{localStorage.removeItem(LS);localStorage.removeItem(READER_LS);}catch(e){} location.reload();break;
     case 'set': {
       const k=t.dataset.set,v=t.dataset.value;
       store.settings[k]=k==='margin'?Number(v):v;
@@ -1248,19 +1403,23 @@ app.addEventListener('click',e=>{
       if(b&&el)loadPreviewText(el,b);
       break;
     }
+    case 'reader-prev': {const el=t.closest('.overlay');if(el)readerGo(el,-1);break;}
+    case 'reader-next': {const el=t.closest('.overlay');if(el)readerGo(el,1);break;}
     case 'retry-reader': {
-      const b=bookById(t.dataset.id),el=t.closest('.overlay');
-      if(b&&el){
-        const body=el.querySelector('[data-reader-body]');
-        if(body)body.innerHTML=loaderHTML('Opening the book');
-        excerptFor(b).then(d=>{if(el.isConnected)renderReaderBody(el,b,d);});
-      }
+      const el=t.closest('.overlay');
+      if(el&&el._reader)loadReaderText(el,el._reader.book);
       break;
     }
   }
 });
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){if(overlayStack.length)popOverlay();return;}
+  const top=overlayStack[overlayStack.length-1];
+  if(top&&top.classList.contains('reader')){
+    if(e.key==='ArrowLeft'){e.preventDefault();readerGo(top,-1);}
+    if(e.key==='ArrowRight'){e.preventDefault();readerGo(top,1);}
+    return;
+  }
   if(!overlayStack.length&&store.view==='foryou'){
     if(e.key==='ArrowLeft')decideDeck('skip');
     if(e.key==='ArrowRight')decideDeck('keep');
