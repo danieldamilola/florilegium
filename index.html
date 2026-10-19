@@ -691,6 +691,7 @@ function seedShelf(){
     const book=FALLBACK_BOOKS.find(x=>x.id===s.id);
     return {bookId:s.id,book,status:s.status,addedAt:Date.now()-i*86400000};
   });
+  save();
 }
 const inShelf=id=>store.shelf.find(s=>s.bookId===id);
 function addToShelf(book,status='to-read'){
@@ -1041,7 +1042,7 @@ function popOverlay(){
 /* preview */
 function previewActions(book){
   const saved=!!inShelf(book.id);
-  return `<button class="btn btn-primary" data-act="reader" data-id="${book.id}">Start reading</button>
+  return `<button class="btn btn-primary" data-act="reader" data-id="${book.id}">Read a little</button>
     <button class="btn btn-ghost" data-act="save" data-id="${book.id}">${saved?I.check+' On your shelf':I.bm+' Add to shelf'}</button>`;
 }
 function openPreview(book){
@@ -1499,11 +1500,12 @@ function applyCatalogue(books){
   if(!interacted){
     const pickId=store.pick&&store.pick.id;
     const recPool=nicePool().filter(b=>b.id!==pickId&&!inShelf(b.id));
-    store.recommended=shuffle(recPool.length>=3?recPool:nicePool().filter(b=>b.id!==pickId)).slice(0,3);
+    store.recommended=shuffle(recPool.length>=3?recPool:nicePool().filter(b=>b.id!==pickId&&!inShelf(b.id))).slice(0,3);
   }
   const pickId=store.pick&&store.pick.id;
-  let fresh=shuffle(books.filter(b=>b.cover&&b.title&&isEnglish(b)&&!inShelf(b.id)&&b.id!==pickId&&!DULL.test((b.subjects||[]).join(' '))&&!OMNIBUS.test(b.title)));
-  if(fresh.length<6)fresh=shuffle(books.filter(b=>b.cover&&b.title&&b.id!==pickId));
+  const deckEligible=b=>b.cover&&b.title&&isEnglish(b)&&!inShelf(b.id)&&b.id!==pickId&&!DULL.test((b.subjects||[]).join(' '))&&!OMNIBUS.test(b.title);
+  let fresh=shuffle(books.filter(deckEligible));
+  if(fresh.length<6)fresh=shuffle(books.filter(b=>b.cover&&b.title&&isEnglish(b)&&!inShelf(b.id)&&b.id!==pickId));
   if(interacted){
     const add=fresh.filter(b=>!store.deck.books.some(x=>x.id===b.id)).slice(0,10);
     store.deck.books.push(...add);
@@ -1549,7 +1551,7 @@ async function init(){
   pickDaily();
   const pickId=store.pick&&store.pick.id;
   const seedDeck=FALLBACK_BOOKS.filter(b=>!inShelf(b.id)&&b.id!==pickId);
-  store.deck.books=shuffle(seedDeck.length>=6?seedDeck:FALLBACK_BOOKS.filter(b=>b.id!==pickId));
+  store.deck.books=shuffle(seedDeck.length>=6?seedDeck:FALLBACK_BOOKS.filter(b=>!inShelf(b.id)&&b.id!==pickId));
   store.deck.index=0;store.deck.loading=false;
   renderAll();
   loadCatalogue(0);

@@ -101,12 +101,14 @@ const readerState=page=>page.evaluate(()=>{
       return {
         paras:el.querySelectorAll('[data-excerpt] p').length,
         end:(el.querySelector('.preview-end .kicker')||{}).textContent||'',
+        readerLabel:(el.querySelector('[data-act="reader"]')||{}).textContent||'',
         hasReaderBtn:!!el.querySelector('[data-act="reader"]')
       };
     });
     assert(preview.paras===3,'preview shows exactly 3 paragraphs (got '+preview.paras+')');
     assert(/end of preview/i.test(preview.end),'preview shows END OF PREVIEW (got "'+preview.end+'")');
-    assert(preview.hasReaderBtn,'preview offers a Start reading action');
+    assert(preview.hasReaderBtn,'preview offers a reading action');
+    assert(/read a little/i.test(preview.readerLabel),'preview CTA reads "Read a little" (got "'+preview.readerLabel.trim()+'")');
 
     /* chapterless books paginate in ~22-paragraph pages (pure logic check) */
     const pageMode=await page.evaluate(()=>{
@@ -342,6 +344,31 @@ const readerState=page=>page.evaluate(()=>{
     assert(true,'preview Retry refetches after an empty result (3 paragraphs)');
     await page.evaluate(()=>{while(overlayStack.length)popOverlay();});
     await page.waitForFunction(()=>!document.querySelector('.overlay'),{timeout:5000});
+
+    /* ---------------------------------------------------------------
+       7c. Catalogue pools never offer books already on the shelf
+    --------------------------------------------------------------- */
+    console.log('\n[7c] deck/recommendation pools exclude the shelf');
+    const poolCheck=await page.evaluate(()=>{
+      const mk=(id,title)=>({id,title,author:'A',cover:'c',subjects:['Fiction'],languages:['en'],downloads:1});
+      const shelfBook=store.shelf[0].book;
+      const shelfIds=store.shelf.map(s=>s.bookId);
+      const savedDeck=store.deck.books.slice();
+      /* main path: plenty of eligible books */
+      store.books=[shelfBook,...[900001,900002,900003,900004,900005,900006].map(n=>mk(n,'Book '+n))];
+      store.deck.books=[];store.deck.index=0;
+      applyCatalogue(store.books.slice());
+      const deckMain=store.deck.books.map(b=>b.id),recMain=store.recommended.map(b=>b.id);
+      /* fallback path: fewer than six eligible books */
+      store.books=[shelfBook,mk(910001,'One'),mk(910002,'Two')];
+      store.deck.books=[];store.deck.index=0;
+      applyCatalogue(store.books.slice());
+      const deckFall=store.deck.books.map(b=>b.id),recFall=store.recommended.map(b=>b.id);
+      store.deck.books=savedDeck;
+      return {shelfIds,deckMain,recMain,deckFall,recFall};
+    });
+    const leaked=[...poolCheck.deckMain,...poolCheck.recMain,...poolCheck.deckFall,...poolCheck.recFall].filter(id=>poolCheck.shelfIds.includes(id));
+    assert(leaked.length===0,'catalogue pools exclude shelf books in the main and fallback paths');
 
     /* ---------------------------------------------------------------
        8. No uncaught page errors
