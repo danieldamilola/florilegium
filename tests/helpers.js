@@ -12,6 +12,7 @@
  */
 
 const { spawn } = require('child_process');
+const fs = require('fs');
 const net = require('net');
 const path = require('path');
 
@@ -43,27 +44,61 @@ async function waitForPort(port, ms) {
   return false;
 }
 
-async function startServer() {
-  if (await probePort(PORT)) {
-    return { port: PORT, stop() {}, reused: true };
+async function freePortFrom(start, tries = 40) {
+  for (let p = start; p < start + tries; p++) {
+    if (!(await probePort(p))) return p;
   }
+  throw new Error(`no free port in ${start}..${start + tries - 1}`);
+}
+
+function sha256(buf) {
+  return require('crypto').createHash('sha256').update(buf).digest('hex');
+}
+
+/*
+ * Starts a static server for ROOT/index.html on its own free port.
+ *
+ * It deliberately does NOT reuse a busy port. An earlier version did, and a
+ * leaked server from an aborted run served a *stale copy* of the app, so the
+ * whole suite silently validated the wrong build. The served bytes are now
+ * fingerprinted against the working copy and a mismatch is a hard error.
+ */
+async function startServer() {
+  const port = await freePortFrom(PORT);
   const py = process.env.FLORI_PYTHON || 'python';
-  const child = spawn(py, ['-m', 'http.server', String(PORT), '--bind', '127.0.0.1'], {
+  const child = spawn(py, ['-m', 'http.server', String(port), '--bind', '127.0.0.1'], {
     cwd: ROOT,
     stdio: 'ignore',
     windowsHide: true
   });
-  child.on('error', () => {});
-  const ok = await waitForPort(PORT, START_TIMEOUT);
-  if (!ok) {
+  let killed = false;
+  const kill = () => {
+    if (killed) return;
+    killed = true;
     try { child.kill(); } catch (e) {}
-    throw new Error(`static server did not come up on 127.0.0.1:${PORT} (${py} -m http.server)`);
-  }
-  return {
-    port: PORT,
-    reused: false,
-    stop() { try { child.kill(); } catch (e) {} }
   };
+  child.on('error', () => {});
+  process.once('exit', kill);
+  process.once('SIGINT', () => { kill(); process.exit(130); });
+
+  const up = await waitForPort(port, START_TIMEOUT);
+  if (!up) {
+    kill();
+    throw new Error(`static server did not come up on 127.0.0.1:${port} (${py} -m http.server)`);
+  }
+
+  const want = sha256(fs.readFileSync(path.join(ROOT, 'index.html')));
+  const got = sha256(Buffer.from(await (await fetch(`http://127.0.0.1:${port}/index.html`)).arrayBuffer()));
+  if (want !== got) {
+    kill();
+    throw new Error(
+      `static server on 127.0.0.1:${port} is not serving ${path.join(ROOT, 'index.html')} ` +
+      `(served sha256 ${got.slice(0, 12)}, expected ${want.slice(0, 12)}). ` +
+      `Refusing to run the suite against an unknown build.`
+    );
+  }
+
+  return { port, root: ROOT, stop: kill };
 }
 
 /* --------------------------------------------------------- in-page helpers */
@@ -73,7 +108,7 @@ async function startServer() {
  * degrades gracefully: if the markup changes, the probes still find *something*
  * so assertions fail with a readable message instead of throwing.
  */
-const QA_HELPERS = `window.__QA = (function(){
+const QA_HELPERS = String.raw`window.__QA = (function(){
   function root(){
     var ovs = Array.prototype.slice.call(document.querySelectorAll('[data-overlays] > *'));
     return ovs.filter(function(o){ return o.classList.contains('open') || o.offsetParent !== null; })
@@ -83,11 +118,11 @@ const QA_HELPERS = `window.__QA = (function(){
   }
   function readerRoot(){
     var ovs = Array.prototype.slice.call(document.querySelectorAll('[data-overlays] > *'));
-    var byClass = ovs.find(function(o){ return /(^|\\s|\\-)reader(\\s|-|$)/i.test(o.className||''); });
+    var byClass = ovs.find(function(o){ return /(^|\s|\-)reader(\s|-|$)/i.test(o.className||''); });
     if (byClass) return byClass;
     var byBtn = ovs.find(function(o){ return !!o.querySelector('[data-act="reader-settings"],[aria-label="Reading settings"],[aria-label*="etting"]'); });
     if (byBtn) return byBtn;
-    var NOT_READER = /\\b(preview|search|browse|sheet)\\b/i;
+    var NOT_READER = /\b(preview|search|browse|sheet)\b/i;
     var visible = ovs.filter(function(o){ return o.offsetParent !== null; });
     var candidates = visible.filter(function(o){ return !NOT_READER.test(o.className||''); });
     return (candidates[ candidates.length-1 ] || visible[visible.length-1] || ovs[ovs.length-1] || null);
@@ -102,6 +137,29 @@ const QA_HELPERS = `window.__QA = (function(){
 
   function sig(s){ if(!s) return 'none'; return [s.paras, s.textLen, s.scrollTop, (s.first||'').slice(0,70), (s.last||'').slice(0,70)].join('|'); }
 
+  /* Terminal-state detector: returns {ok, evidence}.
+     Only standalone marker lines, unambiguous end sentences, or an explicit
+     terminal block whose own copy agrees. Ordinary prose must never count -
+     a real book contained "at the end of the Roman Republic". */
+  function endState(ov){
+    var body=bodyHost(ov);
+    var text=body.innerText||body.textContent||"";
+    var MARK=/^(end of (the )?book|the end|finis|fin|\u00a7\s*end of (the )?book|the end of (this|the) (book|edition|text))$/i;
+    var lines=String(text).split("\n").map(function(l){return l.trim();}).filter(Boolean);
+    for(var i=0;i<lines.length;i++){
+      var clean=lines[i].replace(/[\s\u00b7\u2022.\-\u2014:]+$/,"");
+      if(MARK.test(clean)) return {ok:true, evidence:lines.slice(i,Math.min(lines.length,i+2)).join(" ").slice(0,90)};
+    }
+    var sent=/(you have reached the end|that is the end of|reached the end of (this|the) (book|edition|text)|there is nothing (more )?to read)/i.exec(text);
+    if(sent) return {ok:true, evidence:sent[0]};
+    var term=body.querySelector("[data-reader-end],[data-end-of-book],[data-reader-complete]");
+    if(term){
+      var t=(term.innerText||term.textContent||"").trim();
+      var s2=/(you have reached the end|that is the end|end of (the )?book|the end)/i.exec(t);
+      if(s2) return {ok:true, evidence:t.replace(/\s+/g," ").slice(0,90)};
+    }
+    return {ok:false, evidence:""};
+  }
   function readerState(){
     var ov = readerRoot(); if(!ov) return null;
     var body = bodyHost(ov), sc = scrollHost(ov), ps = parasOf(body);
@@ -122,18 +180,31 @@ const QA_HELPERS = `window.__QA = (function(){
       theme:ov.getAttribute('data-theme')||'',
       progress: pbar ? (pbar.style.width || (pbar.getBoundingClientRect().width+'px')) : null,
       chapter: chap ? ((chap.innerText||'').trim()) : '',
-      header: (ov.innerText||'').split('\\n').filter(Boolean).slice(0,6).join(' | '),
+      header: (ov.innerText||'').split('\n').filter(Boolean).slice(0,6).join(' | '),
       buttons: Array.prototype.slice.call(ov.querySelectorAll('button,[data-act],[role="button"]')).map(function(b){
-        return { t:((b.innerText||'')+' '+(b.getAttribute('aria-label')||'')).replace(/\\s+/g,' ').trim(),
+        return { t:((b.innerText||'')+' '+(b.getAttribute('aria-label')||'')).replace(/\s+/g,' ').trim(),
                  act:b.getAttribute('data-act')||'', aria:b.getAttribute('aria-label')||'',
                  val:b.getAttribute('data-value')||'', dis:!!b.disabled };
       }),
       loading: ov.querySelectorAll('.loader,.q-skel').length > 0,
       hasLoader: !!ov.querySelector('.loader'),
-      errorState: /could not be fetched|pages are quiet|stacks are quiet|failed to load|could not be loaded/i.test(text),
+      /* NB: match specific error copy only. A bare "quiet" also occurs in
+         ordinary prose ("a quiet morning") and produced false positives. */
+      errorState: /could not be fetched|pages are quiet|stacks are quiet|failed to load|could not be loaded|did not open/i.test(text),
+      errorKind: ov.getAttribute('data-reader-error')||'',
+      fullText: text.replace(/\s+/g,' ').slice(0, 700),
+      rateLimited: /too many requests|rate.?limit|throttl|slow down|busy right now/i.test(text),
       prototypeCopy: /This prototype shows the opening pages|full text is free at Project Gutenberg/i.test(text),
-      endOfBook: /end of (the )?book\\b|end of the project gutenberg|\\bthe end\\b|you('|’)ve finished|finished reading|start (over|again)|read again/i.test(text),
-      errorHTML: /could not be fetched|pages are quiet|Try again/i.test(text) ? text.replace(/\\s+/g,' ').slice(0,240) : '',
+      /* End-of-book detection must not fire on ordinary prose: a live book
+         contained "at the end of the Roman Republic" and tripped an older
+         /the end/ pattern three chapters into a 45-chapter novel. Only accept
+         standalone marker lines, an explicit terminal block whose own text
+         agrees, or an unambiguous end sentence. */
+      endOfBook: (function(){
+        var e=endState(ov);
+        return e.ok ? e.evidence : false;
+      })(),
+      errorHTML: /could not be fetched|pages are quiet|Try again/i.test(text) ? text.replace(/\s+/g,' ').slice(0,240) : '',
       fontFamily: p0 ? p0.fontFamily : bcs.fontFamily,
       fontSize: p0 ? p0.fontSize : bcs.fontSize,
       padLeft: bcs.paddingLeft,
@@ -151,12 +222,12 @@ const QA_HELPERS = `window.__QA = (function(){
     if(!ov) return null;
     var box = ov.querySelector('[data-excerpt],.preview-text,[class*="excerpt"],[class*="preview"] [class*="text"]');
     var ps = box ? parasOf(box) : [];
-    var btns = Array.prototype.slice.call(ov.querySelectorAll('button')).map(function(b){ return (b.innerText||'').replace(/\\s+/g,' ').trim(); });
+    var btns = Array.prototype.slice.call(ov.querySelectorAll('button')).map(function(b){ return (b.innerText||'').replace(/\s+/g,' ').trim(); });
     return {
       open:true,
       paras:ps.length,
       first:(ps[0]||{}).textContent||'',
-      text:(ov.innerText||'').replace(/\\s+/g,' '),
+      text:(ov.innerText||'').replace(/\s+/g,' '),
       endPreview:/end of preview/i.test(ov.innerText||''),
       hasReadALittle:btns.some(function(t){ return /read a little/i.test(t); }),
       hasAddToShelf:btns.some(function(t){ return /add to shelf|on your shelf/i.test(t); }),
@@ -173,7 +244,7 @@ const QA_HELPERS = `window.__QA = (function(){
     var cands = Array.prototype.slice.call(scope.querySelectorAll('button,[data-act],[role="button"],a'))
       .filter(function(e){ return !e.disabled && e.offsetParent !== null; });
     var hit = cands.filter(function(e){
-      var t = ((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.getAttribute('data-act')||'')).replace(/\\s+/g,' ');
+      var t = ((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.getAttribute('data-act')||'')).replace(/\s+/g,' ');
       return rx.test(t);
     })[nth||0];
     if(!hit) return null;
@@ -199,14 +270,65 @@ const QA_HELPERS = `window.__QA = (function(){
   function readerPresent(){
     var ovs = Array.prototype.slice.call(document.querySelectorAll('[data-overlays] > *'));
     return ovs.some(function(o){
-      return /(^|\\s|\\-)reader(\\s|-|$)/i.test(o.className||'')
+      return /(^|\s|\-)reader(\s|-|$)/i.test(o.className||'')
         || !!o.querySelector('[data-act="reader-settings"],[aria-label="Reading settings"]');
     });
   }
 
+  /* Measured geometry of the controls a thumb has to hit. */
+  function touchTargets(){
+    var out=[];
+    var scope = readerRoot() || root() || document;
+    Array.prototype.slice.call(scope.querySelectorAll('[data-act],[role="button"],button,a')).forEach(function(el){
+      if(el.getClientRects().length===0) return;
+      var r=el.getBoundingClientRect();
+      if(!r.width && !r.height) return;
+      out.push({
+        act: el.getAttribute('data-act')||'',
+        label: ((el.innerText||'')+' '+(el.getAttribute('aria-label')||'')).replace(/\s+/g,' ').trim().slice(0,40),
+        w: Math.round(r.width*10)/10, h: Math.round(r.height*10)/10
+      });
+    });
+    return out;
+  }
+
+  /* For You deck: the visible card plus every card id the deck still holds. */
+  function deckState(){
+    var el = document.querySelector('[data-screen="foryou"]');
+    if(!el) return null;
+    var top = el.querySelector('[data-deck-top][data-id]');
+    var empty = el.querySelector('.empty');
+    return {
+      active: !!document.querySelector('.view.view-foryou.active'),
+      topId: top ? top.getAttribute('data-id') : null,
+      topTitle: top ? ((top.querySelector('.deck-title')||{}).textContent||'') : '',
+      loading: !!el.querySelector('.loader'),
+      empty: !!empty,
+      emptyText: empty ? empty.innerText.replace(/\s+/g,' ').trim() : '',
+      emptyActions: empty ? Array.prototype.slice.call(empty.querySelectorAll('button,[data-act]')).map(function(b){ return (b.innerText||'').trim(); }) : [],
+      rows: Array.prototype.slice.call(el.querySelectorAll('[data-act="preview"][data-id]')).map(function(r){ return r.getAttribute('data-id'); }),
+      note: (el.querySelector('.deck-note')||{}).textContent||''
+    };
+  }
+
+  /* Shelf contents as the UI reports them, not as storage does. */
+  function shelfState(){
+    var el = document.querySelector('[data-screen="shelf"]');
+    if(!el) return null;
+    return {
+      count: ((el.querySelector('.count-large')||{}).textContent||''),
+      rows: Array.prototype.slice.call(el.querySelectorAll('[data-act="preview"][data-id]')).map(function(r){
+        return { id: r.getAttribute('data-id'), text: r.innerText.replace(/\s+/g,' ').trim() };
+      }),
+      tabs: Array.prototype.slice.call(el.querySelectorAll('[data-act="shelf-filter"]')).map(function(b){
+        return { f: b.getAttribute('data-filter'), text: (b.innerText||'').replace(/\s+/g,' ').trim() };
+      })
+    };
+  }
+
   return { root:root, readerRoot:readerRoot, scrollHost:scrollHost, bodyHost:bodyHost,
            parasOf:parasOf, sig:sig, readerState:readerState, previewState:previewState,
-           readerPresent:readerPresent,
+           readerPresent:readerPresent, touchTargets:touchTargets, deckState:deckState, shelfState:shelfState,
            clickIn:clickIn, clickScrollBottom:clickScrollBottom, frames:frames };
 })();`;
 
@@ -220,7 +342,7 @@ function isRealError(text) {
   return !IGNORED_ERROR.test(text);
 }
 
-async function launchBrowser() {
+async function launchBrowser(overrides = {}) {
   const puppeteer = require('puppeteer-core');
   return puppeteer.launch({
     executablePath: EDGE,
@@ -234,7 +356,8 @@ async function launchBrowser() {
     ],
     defaultViewport: { width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
     userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-    protocolTimeout: 180000
+    protocolTimeout: 300000,
+    ...overrides
   });
 }
 
